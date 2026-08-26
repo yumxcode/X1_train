@@ -46,6 +46,9 @@ class X1DHStandEnv(DirectRLEnv):
 
     def __init__(self, cfg: X1DHStandEnvCfg, render_mode=None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
+        # all IsaacLab buffers (scene entities, physics views, sensor data)
+        # are ready after the base class finishes; allocate our buffers here
+        self._init_buffers()
 
     # ------------------------------------------------------------------ #
     # Scene / buffer setup                                               #
