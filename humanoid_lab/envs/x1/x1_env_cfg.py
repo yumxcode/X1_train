@@ -27,12 +27,8 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import PhysxCfg, RigidBodyMaterialCfg, SimulationCfg
 from isaaclab.sim.converters import UrdfConverterCfg
-from isaaclab.sim.schemas import (
-    ArticulationRootPropertiesCfg,
-    CollisionPropertiesCfg,
-    RigidBodyPropertiesCfg,
-)
-from isaaclab.sim.spawners.from_files import UrdfFileCfg
+from isaaclab.sim.schemas import ArticulationRootPropertiesCfg, RigidBodyPropertiesCfg
+from isaaclab.sim.spawners.from_files import UsdFileCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.height_field import (
     HfInvertedPyramidSlopedTerrainCfg,
@@ -46,9 +42,25 @@ from humanoid_lab import LEGGED_GYM_ROOT_DIR
 
 
 # ------------------------------------------------------------------ #
-# Robot articulation: URDF -> USD at spawn time (cached per process) #
+# Robot articulation: URDF -> USD (converted once, cached per run)   #
 # ------------------------------------------------------------------ #
 X1_URDF_PATH = f"{LEGGED_GYM_ROOT_DIR}/resources/robots/x1/urdf/x1.urdf"
+
+# conversion parameters (used by the training entry to produce the USD cache)
+X1_URDF_CONVERTER_CFG = UrdfConverterCfg(
+    asset_path=X1_URDF_PATH,
+    fix_base=False,
+    merge_fixed_joints=True,
+    self_collision=True,
+    replace_cylinders_with_capsules=False,
+    joint_drive=UrdfConverterCfg.JointDriveCfg(
+        target_type="none",
+        drive_type="force",
+        gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),
+    ),
+    link_density=0.0,
+    collider_type="convex_hull",
+)
 
 X1_DEFAULT_JOINT_ANGLES = {
     'left_hip_pitch_joint': 0.4,
@@ -67,28 +79,25 @@ X1_DEFAULT_JOINT_ANGLES = {
 
 X1_ARTICULATION_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
-    spawn=UrdfFileCfg(
-        asset_path=X1_URDF_PATH,
+    spawn=UsdFileCfg(
+        # usd_path is injected at runtime after the URDF->USD conversion
+        usd_path="",
         activate_contact_sensors=True,
-        fix_base=False,
-        merge_fixed_joints=True,
-        self_collision=True,
-        replace_cylinders_with_capsules=False,
-        joint_drive=UrdfConverterCfg.JointDriveCfg(
-            target_type="none",
-            drive_type="force",
-            gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),
-        ),
-        rigid_props=RigidBodyPropertiesCfg(),
-        collision_props=CollisionPropertiesCfg(
-            contact_offset=0.01,
-            rest_offset=0.0,
+        rigid_props=RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
         ),
         articulation_props=ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=0,
         ),
+        copy_from_source=False,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.7),

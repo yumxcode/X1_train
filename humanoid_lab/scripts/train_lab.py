@@ -51,11 +51,42 @@ from humanoid_lab.envs import (  # noqa: E402
 from humanoid_lab.scripts.utils import class_to_dict, get_load_path  # noqa: E402
 
 
+def ensure_x1_usd(cache_dir: str) -> str:
+    """Convert the X1 URDF to a USD file once, then return the cached path.
+
+    The IsaacLab contact sensor (and the rest of the pipeline) is only
+    exercised on pre-converted USD assets (UsdFileCfg), which is the
+    officially supported flow. The conversion runs once per container.
+    """
+    from isaaclab.sim.converters import UrdfConverter  # noqa: E402
+
+    from humanoid_lab.envs.x1.x1_env_cfg import X1_URDF_CONVERTER_CFG  # noqa: E402
+
+    usd_path = os.path.join(cache_dir, "x1.usd")
+    if os.path.exists(usd_path):
+        print(f"[train_lab] using cached X1 USD: {usd_path}")
+        return usd_path
+
+    os.makedirs(cache_dir, exist_ok=True)
+    conv_cfg = X1_URDF_CONVERTER_CFG.replace(usd_dir=cache_dir, usd_file_name="x1.usd")
+    print(f"[train_lab] converting URDF -> USD in {cache_dir} ...")
+    converter = UrdfConverter(conv_cfg)
+    print(f"[train_lab] conversion done: {converter.usd_path}")
+    return converter.usd_path
+
+
 def main(args):
     env_cfg = X1DHStandEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
     torch.manual_seed(args.seed)
+
+    # URDF -> USD (cached) and inject the path into the spawn config
+    usd_cache_dir = os.path.join(
+        LEGGED_GYM_ROOT_DIR, "logs", "x1_dh_stand", "urdf_cache"
+    )
+    usd_path = ensure_x1_usd(usd_cache_dir)
+    env_cfg.scene.robot.spawn.usd_path = usd_path
 
     print(f"[train_lab] creating env with {args.num_envs} envs ...")
     env = X1DHStandEnv(cfg=env_cfg, render_mode=None)
