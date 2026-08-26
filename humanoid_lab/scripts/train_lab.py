@@ -26,6 +26,12 @@ parser.add_argument("--checkpoint", type=int, default=-1)
 parser.add_argument("--rl_device", type=str, default="cuda:0")
 args_cli, unknown = parser.parse_known_args()
 
+# make the repo root (e.g. /workspace/isaaclab/X1_train) importable when the
+# script is launched by path (gm-run <repo>/humanoid_lab/scripts/train_lab.py)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from isaaclab.app import AppLauncher
 
 app_launcher = AppLauncher(headless=args_cli.headless)
