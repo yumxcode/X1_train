@@ -42,7 +42,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 class DHOnPolicyRunner:
 
-    def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
+    def __init__(self, env, train_cfg, log_dir=None, device="cpu"):
 
         self.cfg = train_cfg["runner"]
         self.alg_cfg = train_cfg["algorithm"]
