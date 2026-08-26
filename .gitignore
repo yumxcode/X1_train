@@ -61,3 +61,5 @@ __pycache__
 *.swp
 
 MUJOCO_LOG.TXT
+# isaaclab reference sources (local API check cache)
+.cache/
