@@ -177,11 +177,11 @@ class X1SceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = X1_ARTICULATION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     contact_forces: ContactSensorCfg = ContactSensorCfg(
-        # NOTE: leaf token must match the body prims (not the articulation root).
-        # `{ENV_REGEX_NS}/Robot` only matches the root prim which carries no
-        # PhysxContactReportAPI for URDF-converted assets; `/*` matches every
-        # link prim that has the contact reporter API applied.
-        prim_path="{ENV_REGEX_NS}/Robot/*",
+        # NOTE: the sensor resolves `leaf_pattern = prim_path.rsplit('/',1)[-1]`
+        # and wraps every path token in a regex (^token$). `*` is invalid regex
+        # ("nothing to repeat"); `.*` matches every body prim under the robot
+        # articulation that carries the PhysxContactReportAPI.
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
         history_length=0,
         track_air_time=False,
     )

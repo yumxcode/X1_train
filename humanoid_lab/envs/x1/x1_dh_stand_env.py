@@ -70,6 +70,14 @@ class X1DHStandEnv(DirectRLEnv):
         self.feet_indices, _ = self._robot.find_bodies(".*ankle_roll")
         self.knee_indices, _ = self._robot.find_bodies(".*knee_pitch")
         self.penalised_contact_indices, _ = self._robot.find_bodies("base_link")
+        # sanity: contact sensor must see the same body set as the articulation
+        sensor_bodies = self._contact_sensor.num_instances if hasattr(self._contact_sensor, "num_instances") else 0
+        if sensor_bodies != self._robot.num_bodies:
+            print(
+                f"[X1DHStandEnv] WARNING contact sensor bodies ({sensor_bodies}) "
+                f"!= articulation bodies ({self._robot.num_bodies}); "
+                "contact indexing may be misaligned"
+            )
 
         # ---------------- joint ordering helpers --------------------------
         self.dof_names = list(self._robot.joint_names)
