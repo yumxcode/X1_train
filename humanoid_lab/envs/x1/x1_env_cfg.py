@@ -133,7 +133,6 @@ class X1SceneCfg(InteractiveSceneCfg):
                 # flat patch (full platform) -- replaces original "flat" (30%)
                 "flat": HfPyramidSlopedTerrainCfg(
                     proportion=0.3,
-                    difficulty_range=(0.0, 0.0),
                     slope_range=(0.0, 0.0),
                     platform_width=8.0,
                 ),
@@ -142,18 +141,15 @@ class X1SceneCfg(InteractiveSceneCfg):
                     proportion=0.3,
                     noise_range=(0.005, 0.02),
                     noise_step=0.005,
-                    difficulty_range=(0.0, 1.0),
                 ),
                 # slopes -- original slope up (20%) / slope down (20%)
                 "slope_up": HfPyramidSlopedTerrainCfg(
                     proportion=0.2,
-                    difficulty_range=(0.0, 1.0),
                     slope_range=(0.0, 0.1),
                     platform_width=3.0,
                 ),
                 "slope_down": HfInvertedPyramidSlopedTerrainCfg(
                     proportion=0.2,
-                    difficulty_range=(0.0, 1.0),
                     slope_range=(0.0, 0.1),
                     platform_width=3.0,
                 ),
