@@ -75,13 +75,14 @@ X1_ARTICULATION_CFG = ArticulationCfg(
             drive_type="force",
             gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),
         ),
-        rigid_props=RigidBodyPropertiesCfg(),
+        rigid_props=RigidBodyPropertiesCfg(
+            contact_offset=0.01,
+            rest_offset=0.0,
+        ),
         articulation_props=ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=0,
-            contact_offset=0.01,
-            rest_offset=0.0,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
