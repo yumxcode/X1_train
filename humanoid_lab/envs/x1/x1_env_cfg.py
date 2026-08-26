@@ -27,7 +27,11 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import PhysxCfg, RigidBodyMaterialCfg, SimulationCfg
 from isaaclab.sim.converters import UrdfConverterCfg
-from isaaclab.sim.schemas import ArticulationRootPropertiesCfg, RigidBodyPropertiesCfg
+from isaaclab.sim.schemas import (
+    ArticulationRootPropertiesCfg,
+    CollisionPropertiesCfg,
+    RigidBodyPropertiesCfg,
+)
 from isaaclab.sim.spawners.from_files import UrdfFileCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.height_field import (
@@ -75,7 +79,8 @@ X1_ARTICULATION_CFG = ArticulationCfg(
             drive_type="force",
             gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),
         ),
-        rigid_props=RigidBodyPropertiesCfg(
+        rigid_props=RigidBodyPropertiesCfg(),
+        collision_props=CollisionPropertiesCfg(
             contact_offset=0.01,
             rest_offset=0.0,
         ),
