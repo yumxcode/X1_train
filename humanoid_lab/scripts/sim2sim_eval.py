@@ -470,6 +470,12 @@ def main():
                         help="exit 0 even on FAIL (pipeline smoke tests)")
     args = parser.parse_args()
 
+    # live logs on gradmotion (SDK tails stdout)
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     mujoco = _ensure_mujoco(args.gl)
 
     out_dir = args.out_dir or os.path.join(
@@ -486,6 +492,10 @@ def main():
     print(f"[sim2sim] mujoco model: {MJCF_PATH}")
     model = mujoco.MjModel.from_xml_path(MJCF_PATH)
     model.opt.timestep = SIM_DT
+    # enlarge the offscreen framebuffer (the shipped mjcf caps it at 640 px)
+    model.vis.global_.offwidth = max(args.width, 640)
+    model.vis.global_.offheight = max(args.height, 480)
+    print(f"[sim2sim] offscreen framebuffer: {model.vis.global_.offwidth}x{model.vis.global_.offheight}")
 
     trial_names = [s.strip() for s in args.trials.split(",") if s.strip()]
     results, all_checks, travel, metrics_pack = {}, {}, {}, {}
