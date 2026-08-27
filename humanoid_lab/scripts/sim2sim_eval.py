@@ -115,6 +115,7 @@ CRITERIA = {
 }
 
 TRIALS = {
+    "stand": [(0.0, 24.0, (0.0, 0.0, 0.0))],
     "forward": [(0.0, 2.0, (0.0, 0.0, 0.0)), (2.0, 20.0, (1.0, 0.0, 0.0)), (20.0, 24.0, (0.0, 0.0, 0.0))],
     "omni": [
         (0.0, 2.0, (0.0, 0.0, 0.0)),
@@ -125,6 +126,7 @@ TRIALS = {
     ],
     "max": [(0.0, 2.0, (0.0, 0.0, 0.0)), (2.0, 21.0, (1.2, 0.0, 0.0)), (21.0, 24.0, (0.0, 0.0, 0.0))],
 }
+INIT_HEIGHT = 0.70  # training parity: cfg.env.init_state_z (mjcf default 0.8 gives 2x impact energy)
 GRACE_S = 1.0  # excluded from tracking stats after each command switch
 
 
@@ -210,6 +212,7 @@ class VideoWriter:
 def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, width, height, fps):
     data = mujoco.MjData(model)
     data.qpos[-NUM_ACTIONS:] = DEFAULT_DOF_POS
+    data.qpos[2] = INIT_HEIGHT  # match training spawn (init_state_z), not the mjcf 0.8
     mujoco.mj_step(model, data)
 
     torso_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b) for b in TORSO_BODIES]
