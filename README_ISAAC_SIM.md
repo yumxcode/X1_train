@@ -54,3 +54,13 @@ python humanoid_lab/scripts/train_lab.py --headless --resume --load_run -1 --che
 3. **COM 位移随机化暂未写回物理**（Phase 1）：观测维度保持不变。
 4. **地形**：原版 20×20 trimesh 混合地形以 IsaacLab HF 生成器近似（flat 0.3 / rough 0.3 / slope±0.2，尺寸 8m、网格 0.1m、curriculum 关闭、初始 level≤5）。
 5. **PD 控制频率**：与原版一致——物理 1kHz、policy 100Hz（decimation 10），每个物理子步重算显式 PD 力矩。
+
+## 训练结果（gradmotion 正式跑通）
+
+- **平台任务**：`TASK_20260827_024`（项目 `PRO_20260827_001`，镜像 BJX00000093/V000136 = IsaacSim 5.0 + IsaacLab 2.2.0，RTX 4090D）
+- **配置**：4096 envs × 1000 iterations（commit `0426bdd`，分支 `feat/isaac-sim-migration`），run_name=`isaacsim_train_v1`
+- **吞吐**：~71,000 steps/s（collection 1.28s + learning 0.09s / iter），全程约 25 分钟
+- **学习曲线**：`Train/mean_reward` 从 0.77 单调上升至 ~7.4（last-50 mean 7.23，峰值 8.22@iter992）；关键分量同步上升：`tracking_lin_vel` 0→0.065、`feet_contact_number` 0→0.079、`ref_joint_pos` 0→0.059，`collision`≈0（躯干不撞地）
+- **Checkpoint**：model_0/100/…/1000.pt 共 12 个，SDK 自动上传至 gradmotion（任务页可下载 `policUrlDown`）
+- **曲线数据**：`logs_analysis/train_v1_curves.json`（本仓库，从平台图表 API 导出）
+- **冒烟记录**：smoke1–16 迭代修复 11 个迁移 bug（详见 git log：contact sensor prim 正则、_init_buffers、只读 property、get_axis_params 参数序、privileged obs 2D 形状、push_interval 换算等）
