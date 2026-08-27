@@ -630,23 +630,25 @@ class X1DHStandEnv(DirectRLEnv):
 
         # apply link mass randomization through PhysX link masses (CPU tensors)
         if dr.randomize_base_mass or dr.randomize_link_mass:
+            # PhysX mass/inertia buffers live on CPU: index with CPU env ids
+            env_ids_cpu = env_ids.cpu()
             masses = torch.as_tensor(self._robot.root_physx_view.get_masses())  # (num_envs, num_bodies) CPU
             default_masses = self._robot.data.default_mass.clone().cpu()
-            masses[env_ids] = default_masses[env_ids]
+            masses[env_ids_cpu] = default_masses[env_ids_cpu]
             if dr.randomize_link_mass:
-                masses[env_ids, 1:] = masses[env_ids, 1:] * self.link_masses[env_ids, 1:].cpu()
+                masses[env_ids_cpu, 1:] = masses[env_ids_cpu, 1:] * self.link_masses[env_ids, 1:].cpu()
             if dr.randomize_base_mass:
-                masses[env_ids, 0] = masses[env_ids, 0] + self.payload_masses[env_ids, 0].cpu()
+                masses[env_ids_cpu, 0] = masses[env_ids_cpu, 0] + self.payload_masses[env_ids, 0].cpu()
             # body mass exposed to the critic = merged base-link mass (original semantics)
-            self.body_mass[env_ids] = masses[env_ids, 0].to(self.device)
-            self._robot.root_physx_view.set_masses(masses, env_ids.cpu())
+            self.body_mass[env_ids] = masses[env_ids_cpu, 0].to(self.device)
+            self._robot.root_physx_view.set_masses(masses, env_ids_cpu)
 
             # recompute inertias from the mass ratios (original used recomputeInertia=True)
-            ratios = masses[env_ids] / default_masses[env_ids]
-            inertias = torch.as_tensor(self._robot.root_physx_view.get_inertias())  # (N, B, 9)
+            ratios = masses[env_ids_cpu] / default_masses[env_ids_cpu]
+            inertias = torch.as_tensor(self._robot.root_physx_view.get_inertias())  # (N, B, 9) CPU
             default_inertias = self._robot.data.default_inertia.clone().cpu()
-            inertias[env_ids] = default_inertias[env_ids] * ratios.unsqueeze(-1)
-            self._robot.root_physx_view.set_inertias(inertias, env_ids.cpu())
+            inertias[env_ids_cpu] = default_inertias[env_ids_cpu] * ratios.unsqueeze(-1)
+            self._robot.root_physx_view.set_inertias(inertias, env_ids_cpu)
 
     def randomize_lag_props(self, env_ids):
         dr = self.cfg.domain_rand

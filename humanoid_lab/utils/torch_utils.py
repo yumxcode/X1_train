@@ -42,10 +42,13 @@ quat_apply = quat_rotate
 quat_apply_inverse = quat_rotate_inverse
 
 
-def get_axis_params(axis_idx: int = 2, value: float = -1.0) -> list:
-    """isaacgym.torch_utils.get_axis_params equivalent (for gravity vector)."""
+def get_axis_params(value: float, axis_idx: int = 2) -> list:
+    """isaacgym.torch_utils.get_axis_params equivalent (for gravity vector).
+
+    Note the argument order matches the original: ``get_axis_params(value, axis_idx)``.
+    """
     zs = [0.0] * 3
-    zs[axis_idx] = value
+    zs[int(axis_idx)] = value
     return zs
 
 
