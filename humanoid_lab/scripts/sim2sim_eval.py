@@ -45,10 +45,18 @@ def _ensure_mujoco(gl_backend: str):
         return mujoco
     except ImportError:
         print("[sim2sim] mujoco not installed -> pip install mujoco")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "mujoco"])
-        import mujoco  # noqa: F401
+        for extra in ([], ["-i", "https://pypi.tuna.tsinghua.edu.cn/simple"]):
+            cmd = [sys.executable, "-m", "pip", "install", "--timeout",
+                   "60", "--retries", "2", "mujoco"] + extra
+            print(f"[sim2sim] running: {' '.join(cmd)}")
+            try:
+                subprocess.run(cmd, check=True, timeout=420)
+                import mujoco  # noqa: F401
 
-        return mujoco
+                return mujoco
+            except subprocess.SubprocessError as exc:
+                print(f"[sim2sim] pip attempt failed: {exc}")
+        raise RuntimeError("failed to install mujoco (pypi + tsinghua mirror)")
 
 
 # --------------------------------------------------------------------------- #
