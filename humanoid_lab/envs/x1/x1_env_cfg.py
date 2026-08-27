@@ -104,13 +104,36 @@ X1_ARTICULATION_CFG = ArticulationCfg(
         joint_pos=X1_DEFAULT_JOINT_ANGLES,
     ),
     actuators={
-        # explicit PD control computed in the env -> pure effort interface
-        "legs": ImplicitActuatorCfg(
-            joint_names_expr=[".*_joint"],
-            effort_limit_sim=1000.0,
-            velocity_limit_sim=100.0,
-            stiffness=0.0,
-            damping=0.0,
+        # explicit PD control computed in the env -> pure effort interface.
+        # Per-joint effort limits mirror the URDF (the ORIGINAL Isaac Gym
+        # pipeline used urdf effort * safety.torque_limit; setting 1000 here
+        # lets the policy lean on torques the real actuators cannot produce
+        # and it collapses in mujoco sim2sim at the real ctrlrange clamp).
+        # URDF: hip_pitch/hip_roll/knee = 150, hip_yaw = 50, ankles = 80.
+        "hip_pitch": ImplicitActuatorCfg(
+            joint_names_expr=[".*hip_pitch_joint"],
+            effort_limit_sim=150.0, velocity_limit_sim=8.0,
+            stiffness=0.0, damping=0.0,
+        ),
+        "hip_roll": ImplicitActuatorCfg(
+            joint_names_expr=[".*hip_roll_joint"],
+            effort_limit_sim=150.0, velocity_limit_sim=8.0,
+            stiffness=0.0, damping=0.0,
+        ),
+        "hip_yaw": ImplicitActuatorCfg(
+            joint_names_expr=[".*hip_yaw_joint"],
+            effort_limit_sim=50.0, velocity_limit_sim=24.0,
+            stiffness=0.0, damping=0.0,
+        ),
+        "knee": ImplicitActuatorCfg(
+            joint_names_expr=[".*knee_pitch_joint"],
+            effort_limit_sim=150.0, velocity_limit_sim=8.0,
+            stiffness=0.0, damping=0.0,
+        ),
+        "ankles": ImplicitActuatorCfg(
+            joint_names_expr=[".*ankle_pitch_joint", ".*ankle_roll_joint"],
+            effort_limit_sim=80.0, velocity_limit_sim=10.0,
+            stiffness=0.0, damping=0.0,
         ),
     },
     soft_joint_pos_limit_factor=1.0,
