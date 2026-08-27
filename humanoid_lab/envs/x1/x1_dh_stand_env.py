@@ -63,11 +63,11 @@ class X1DHStandEnv(DirectRLEnv):
         self._terrain = self.scene.terrain
 
         cfg = self.cfg
-        self.num_envs = self.scene.num_envs
+        # NOTE: num_envs / device are read-only properties in DirectRLEnv
+        #       (they resolve to self.scene.num_envs / self.sim.device).
         self.num_dof = self._robot.num_joints
         self.num_bodies = self._robot.num_bodies
         self.num_actions = cfg.env.num_actions
-        self.device = self.sim.device
 
         # ---------------- body indices (name based, order independent) ----
         self.feet_indices, _ = self._robot.find_bodies(".*ankle_roll")
