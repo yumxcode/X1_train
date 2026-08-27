@@ -404,8 +404,8 @@ class X1DHStandEnv(DirectRLEnv):
             base_euler_xyz * cfg.obs_scales.quat,                                 # 3
             self.rand_push_force[:, :2],                                          # 2
             self.rand_push_torque,                                                # 3
-            self.env_frictions[:, 0],                                             # 1
-            self.body_mass / 10.0,                                                # 1
+            self.env_frictions,                                                 # 1 (N,1)
+            (self.body_mass / 10.0).unsqueeze(1),                               # 1 (N,1)
             stance_mask,                                                          # 2
             contact_mask,                                                         # 2
         ), dim=-1)
