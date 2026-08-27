@@ -20,6 +20,8 @@ Isaac Gym -> IsaacLab mapping used here:
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import torch
 from collections import deque
@@ -63,6 +65,9 @@ class X1DHStandEnv(DirectRLEnv):
         self._terrain = self.scene.terrain
 
         cfg = self.cfg
+        # runtime cfg conversions (mirrors original _parse_cfg):
+        # push_interval_s (seconds) -> push_interval (policy steps)
+        cfg.domain_rand.push_interval = int(math.ceil(cfg.domain_rand.push_interval_s / self.step_dt))
         # NOTE: num_envs / device are read-only properties in DirectRLEnv
         #       (they resolve to self.scene.num_envs / self.sim.device).
         self.num_dof = self._robot.num_joints
