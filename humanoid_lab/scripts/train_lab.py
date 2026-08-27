@@ -21,6 +21,9 @@ parser.add_argument("--max_iterations", type=int, default=-1)
 parser.add_argument("--run_name", type=str, default="")
 parser.add_argument("--experiment_name", type=str, default="x1_dh_stand")
 parser.add_argument("--resume", action="store_true", default=False)
+parser.add_argument("--resume_from_path", type=str, default="",
+                    help="explicit checkpoint file (e.g. gradmotion-mounted model_1000_xxx.pt). "
+                         "'auto' searches the repo root / /workspace for model_*.pt")
 parser.add_argument("--load_run", type=str, default="-1")
 parser.add_argument("--checkpoint", type=int, default=-1)
 parser.add_argument("--rl_device", type=str, default="cuda:0")
@@ -75,6 +78,39 @@ def ensure_x1_usd(cache_dir: str) -> str:
     return converter.usd_path
 
 
+def _discover_checkpoint(hint: str) -> str:
+    """Locate a checkpoint file: explicit path, glob, or 'auto' search."""
+    import glob as _glob
+
+    candidates = []
+    if hint and hint not in ("auto", "-1", ""):
+        if os.path.isfile(hint):
+            return hint
+        candidates = sorted(_glob.glob(hint))
+        if not candidates:
+            raise FileNotFoundError(f"resume checkpoint not found: {hint}")
+    else:
+        for pattern in (
+            os.path.join(LEGGED_GYM_ROOT_DIR, "model_*.pt"),
+            os.path.join(LEGGED_GYM_ROOT_DIR, "*.pt"),
+            "/workspace/model_*.pt",
+            "/workspace/*/model_*.pt",
+        ):
+            candidates.extend(_glob.glob(pattern))
+        if not candidates:
+            raise FileNotFoundError("auto search found no mounted *.pt checkpoint")
+
+    def _iter_of(p):
+        try:
+            return int(torch.load(p, map_location="cpu", weights_only=False).get("iter", -1))
+        except Exception:
+            return -1
+
+    best = max(candidates, key=_iter_of)
+    print(f"[train_lab] checkpoint candidates: {candidates} -> {best}")
+    return best
+
+
 def main(args):
     env_cfg = X1DHStandEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
@@ -110,7 +146,23 @@ def main(args):
         LEGGED_GYM_ROOT_DIR, "logs", train_cfg.runner.experiment_name, "exported_data"
     )
     os.makedirs(log_root, exist_ok=True)
-    if args.resume:
+    resume_path = None
+    if args.resume_from_path:
+        src = _discover_checkpoint(args.resume_from_path)
+        # copy the mounted checkpoint into a fresh run dir so that the whole run
+        # (initial + continued checkpoints) lives in one place for the SDK scan
+        log_dir = os.path.join(
+            log_root, datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + train_cfg.runner.run_name
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        it = torch.load(src, map_location="cpu", weights_only=False).get("iter", 0)
+        dst = os.path.join(log_dir, f"model_{it}.pt")
+        import shutil
+
+        shutil.copyfile(src, dst)
+        resume_path = dst
+        print(f"[train_lab] resuming from mounted checkpoint {src} (iter={it})")
+    elif args.resume:
         resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run,
                                     checkpoint=train_cfg.runner.checkpoint)
         log_dir = os.path.dirname(resume_path)
@@ -122,7 +174,7 @@ def main(args):
         os.makedirs(log_dir, exist_ok=True)
 
     runner = DHOnPolicyRunner(venv, all_cfg, log_dir, device=args.rl_device)
-    if args.resume:
+    if resume_path is not None:
         runner.load(resume_path, load_optimizer=True)
 
     runner.learn(
