@@ -68,6 +68,50 @@ import torch  # noqa: E402
 from humanoid_lab.scripts.export_policy_lab import find_checkpoint, load_exported_policy  # noqa: E402
 
 MJCF_PATH = os.path.join(_REPO_ROOT, "resources", "robots", "x1", "mjcf", "xyber_x1_flat.xml")
+MJCF_PATCHED_PATH = os.path.join(_REPO_ROOT, "resources", "robots", "x1", "mjcf", "xyber_x1_flat_patched.xml")
+
+import re as _re
+
+_SPHERE_RE = _re.compile(
+    r'<geom\s+type\s*=\s*"sphere"\s+size\s*=\s*"0\.002"\s+'
+    r'pos\s*=\s*"([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"\s+class\s*=\s*"collision"\s*/>'
+)
+
+
+def _patch_foot_soles(xml_path: str) -> int:
+    """Replace the four 2mm corner-point collision spheres of each foot with a
+    single flat box sole covering the same extent (URDF convex-hull parity).
+
+    The corner spheres live in the INCLUDED robot xml, not the top-level file,
+    so we patch the robot xml into a *_patched* copy (same directory, meshdir
+    stays valid) and rewrite the top-level include accordingly.
+    """
+    top = xml_path
+    robot = os.path.join(os.path.dirname(xml_path), "robot", "xyber_x1", "xyber_x1_serial.xml")
+    with open(robot, "r") as f:
+        text = f.read()
+
+    def repl(m):
+        _x, y, _z = m.group(1), m.group(2), m.group(3)
+        return (
+            f'<geom type="box" size="0.032 0.012 0.072" '
+            f'pos="0 {y} 0" class="collision" />'
+        )
+
+    text2, n = _SPHERE_RE.subn(repl, text)
+    if not n:
+        return 0
+    robot_patched = robot.replace("xyber_x1_serial.xml", "xyber_x1_serial_patched.xml")
+    with open(robot_patched, "w") as f:
+        f.write(text2)
+    with open(top, "r") as f:
+        top_text = f.read()
+    top_text = top_text.replace("robot/xyber_x1/xyber_x1_serial.xml",
+                                "robot/xyber_x1/xyber_x1_serial_patched.xml")
+    with open(MJCF_PATCHED_PATH, "w") as f:
+        f.write(top_text)
+    return n
+
 
 NUM_ACTIONS = 12
 FRAME_STACK = 66
@@ -548,8 +592,15 @@ def main():
     policy = torch.jit.script(exported)
     policy.eval()
 
-    print(f"[sim2sim] mujoco model: {MJCF_PATH}")
-    model = mujoco.MjModel.from_xml_path(MJCF_PATH)
+    # training-parity fix: the mjcf foot collider is four r=2mm point spheres
+    # at the sole corners, while the URDF->USD training asset uses the convex
+    # hull of the whole foot mesh (a FLAT sole). Replacing the corner points
+    # with a flat box sole matching the corner extents (attempted r=30mm
+    # spheres first -> ball bearings, worse; a box reproduces the flat
+    # contact patch the stance policy relies on).
+    soles = _patch_foot_soles(MJCF_PATH)
+    print(f"[sim2sim] foot sole patched to flat boxes ({soles} corner spheres replaced)")
+    model = mujoco.MjModel.from_xml_path(MJCF_PATCHED_PATH)
     model.opt.timestep = SIM_DT
     # training-parity fix: the shipped mjcf sets joint damping=1 on all 12 leg
     # joints while the URDF (training side) declares none (solver-side damping
@@ -559,21 +610,6 @@ def main():
         if name and ("hip" in name or "knee" in name or "ankle" in name):
             model.dof_damping[model.jnt_dofadr[jn]] = 0.0
     print(f"[sim2sim] leg joint damping zeroed for training parity")
-
-    # training-parity fix: the mjcf foot collider is four r=2mm point spheres
-    # at the sole corners, while the URDF->USD training asset uses the convex
-    # hull of the whole foot mesh (a full sole). A single-foot stance cannot
-    # establish on point contacts. Enlarge the corner spheres to approximate
-    # the URDF sole (rounded rectangle ~ sole extent).
-    n_enlarged = 0
-    for gn in range(model.ngeom):
-        gid_body = model.geom_bodyid[gn]
-        body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(gid_body)) or ""
-        if ("ankle_roll" in body_name) and model.geom_type[gn] == mujoco.mjtGeom.mjGEOM_SPHERE \
-                and model.geom_size[gn, 0] <= 0.005 and model.geom_contype[gn] != 0:
-            model.geom_size[gn, 0] = 0.03
-            n_enlarged += 1
-    print(f"[sim2sim] foot sole spheres enlarged to r=0.03 ({n_enlarged} geoms) for training parity")
     # enlarge the offscreen framebuffer (the shipped mjcf caps it at 640 px)
     model.vis.global_.offwidth = max(args.width, 640)
     model.vis.global_.offheight = max(args.height, 480)
