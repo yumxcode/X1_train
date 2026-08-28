@@ -74,12 +74,45 @@ FRAME_STACK = 66
 NUM_SINGLE_OBS = 47
 NUM_COMMANDS = 5
 
-DEFAULT_DOF_POS = np.array(
-    [0.4, 0.05, -0.31, 0.49, -0.21, 0.0, -0.4, -0.05, 0.31, 0.49, -0.21, 0.0],
-    dtype=np.double,
-)
-KPS = np.array([30, 40, 35, 100, 35, 35] * 2, dtype=np.double)
-KDS = np.array([3, 3.0, 4, 10, 0.5, 0.5] * 2, dtype=np.double)
+# --------------------------------------------------------------------------- #
+# JOINT ORDERING FIX (the actual sim2sim collapse root cause)                  #
+#                                                                              #
+# IsaacLab sorts articulation joints in interleaved order (by tree level):     #
+#   L/R hip_pitch, L/R hip_roll, L/R hip_yaw, L/R knee, L/R ankle_pitch, ...  #
+# while the mujoco mjcf stores them blocked (all left, then all right).        #
+# The policy was trained on the INTERLEAVED order -- feeding mujoco's blocked  #
+# qpos/ctrl directly scrambles observations and actions. We build explicit     #
+# index maps by joint NAME and permute at the boundary.                        #
+# --------------------------------------------------------------------------- #
+POLICY_JOINT_ORDER = [
+    "left_hip_pitch", "right_hip_pitch",
+    "left_hip_roll", "right_hip_roll",
+    "left_hip_yaw", "right_hip_yaw",
+    "left_knee_pitch", "right_knee_pitch",
+    "left_ankle_pitch", "right_ankle_pitch",
+    "left_ankle_roll", "right_ankle_roll",
+]
+
+_JOINT_DEFAULTS = {
+    "left_hip_pitch": 0.4, "left_hip_roll": 0.05, "left_hip_yaw": -0.31,
+    "left_knee_pitch": 0.49, "left_ankle_pitch": -0.21, "left_ankle_roll": 0.0,
+    "right_hip_pitch": -0.4, "right_hip_roll": -0.05, "right_hip_yaw": 0.31,
+    "right_knee_pitch": 0.49, "right_ankle_pitch": -0.21, "right_ankle_roll": 0.0,
+}
+_JOINT_KP = {"hip_pitch": 30, "hip_roll": 40, "hip_yaw": 35,
+             "knee_pitch": 100, "ankle_pitch": 35, "ankle_roll": 35}
+_JOINT_KD = {"hip_pitch": 3, "hip_roll": 3.0, "hip_yaw": 4,
+             "knee_pitch": 10, "ankle_pitch": 0.5, "ankle_roll": 0.5}
+
+
+def _joint_family(name: str) -> str:
+    return name.split("_", 1)[1]  # strip left_/right_
+
+
+# policy-order vectors
+DEFAULT_DOF_POS = np.array([_JOINT_DEFAULTS[n] for n in POLICY_JOINT_ORDER], dtype=np.double)
+KPS = np.array([_JOINT_KP[_joint_family(n)] for n in POLICY_JOINT_ORDER], dtype=np.double)
+KDS = np.array([_JOINT_KD[_joint_family(n)] for n in POLICY_JOINT_ORDER], dtype=np.double)
 
 ACTION_SCALE = 0.5
 DECIMATION = 10
@@ -209,17 +242,32 @@ class VideoWriter:
 # --------------------------------------------------------------------------- #
 # rollout                                                                      #
 # --------------------------------------------------------------------------- #
-def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, width, height, fps):
+def build_joint_maps(mujoco, model):
+    """Name-based index maps: policy(interleaved) order <-> mujoco storage."""
+    mj_ids = np.array(
+        [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in POLICY_JOINT_ORDER]
+    )
+    assert (mj_ids >= 0).all(), f"missing joints in mjcf: {mj_ids}"
+    qpos_adr = model.jnt_qposadr[mj_ids].copy()
+    dof_adr = model.jnt_dofadr[mj_ids].copy()
+    act_for_joint = {}
+    for a in range(model.nu):
+        act_for_joint[int(model.actuator_trnid[a, 0])] = a
+    act_adr = np.array([act_for_joint[int(i)] for i in mj_ids])
+    cr = model.actuator_ctrlrange[act_adr].copy()  # (12,2) in policy order
+    print(f"[sim2sim] joint map (policy order -> mujoco qpos adr): {qpos_adr.tolist()}")
+    return qpos_adr, dof_adr, act_adr, cr[:, 0], cr[:, 1]
+
+
+def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, width, height, fps,
+              qpos_adr, dof_adr, act_adr, tau_lo, tau_hi):
     data = mujoco.MjData(model)
-    data.qpos[-NUM_ACTIONS:] = DEFAULT_DOF_POS
+    data.qpos[qpos_adr] = DEFAULT_DOF_POS
     data.qpos[2] = INIT_HEIGHT  # match training spawn (init_state_z), not the mjcf 0.8
     mujoco.mj_step(model, data)
 
     torso_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b) for b in TORSO_BODIES]
     foot_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b) for b in FOOT_BODIES]
-    ctrlrange = model.actuator_ctrlrange.copy()  # (12, 2)
-    tau_lo, tau_hi = ctrlrange[:, 0], ctrlrange[:, 1]
-
     renderer = None
     video_writer = None
     cam = None
@@ -257,8 +305,8 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
         vx_cmd, vy_cmd, wz_cmd = cmd
 
         # --- observation ingredients ------------------------------------------
-        q = data.qpos[-NUM_ACTIONS:].astype(np.double)
-        dq = data.qvel[-NUM_ACTIONS:].astype(np.double)
+        q = data.qpos[qpos_adr].astype(np.double)   # permuted to policy order
+        dq = data.qvel[dof_adr].astype(np.double)
         quat_xyzw = data.sensor("body-orientation").data[[1, 2, 3, 0]].astype(np.double)
         rot = quat_xyzw_to_rot(quat_xyzw)
         v_base = rot.T @ data.qvel[:3].astype(np.double)
@@ -314,7 +362,7 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
         # --- PD @1 kHz -----------------------------------------------------------
         tau = KPS * (target_q + DEFAULT_DOF_POS - q) - KDS * dq
         tau_cmd = np.clip(tau, tau_lo, tau_hi)
-        data.ctrl[:] = tau_cmd
+        data.ctrl[act_adr] = tau_cmd  # permute policy order -> mujoco actuator order
         mujoco.mj_step(model, data)
         count_lowlevel += 1
 
@@ -517,12 +565,14 @@ def main():
     print(f"[sim2sim] offscreen framebuffer: {model.vis.global_.offwidth}x{model.vis.global_.offheight}")
 
     trial_names = [s.strip() for s in args.trials.split(",") if s.strip()]
+    qpos_adr, dof_adr, act_adr, tau_lo, tau_hi = build_joint_maps(mujoco, model)
     results, all_checks, travel, metrics_pack = {}, {}, {}, {}
     for name in trial_names:
         print(f"[sim2sim] === trial {name} ===")
         rec, fall = run_trial(
             mujoco, model, policy, name, TRIALS[name], out_dir,
             make_video=bool(args.video), width=args.width, height=args.height, fps=args.fps,
+            qpos_adr=qpos_adr, dof_adr=dof_adr, act_adr=act_adr, tau_lo=tau_lo, tau_hi=tau_hi,
         )
         checks, stats = evaluate_trial(name, rec, fall, TRIALS[name])
         all_checks.update({f"{k}[{name}]": v for k, v in checks.items()})
