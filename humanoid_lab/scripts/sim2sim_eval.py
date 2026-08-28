@@ -92,50 +92,38 @@ def _urdf_joint_efforts():
 
 
 def build_model_urdf_direct(mujoco):
-    """Build the mujoco model DIRECTLY from the training URDF via MjSpec.
+    """Build the mujoco model DIRECTLY from the training URDF.
 
-    This removes every remaining file-layer difference to the training asset
-    (inertials, convex-hull collision meshes incl. a full flat sole, joint
-    limits, no joint damping). Motors are attached per joint with the URDF
-    effort limits as ctrlrange; a plane floor is added.
+    The URDF importer reuses the embedded <mujoco><compiler> block
+    (meshdir, balanceinertia, fusestatic=false) and auto-creates one motor
+    per revolute joint with ctrlrange = URDF effort — i.e. exact file-layer
+    parity with the training asset (full convex-hull soles, true inertials,
+    no joint damping). A ground plane is attached via MjSpec before compile.
     """
     spec = mujoco.MjSpec.from_file(URDF_PATH)
-    # floor
     spec.worldbody.add_geom(
         name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE,
         size=[0.0, 0.0, 1.0], friction=[1.0, 1.0, 1.0],
     )
-    # motors with URDF effort limits
-    efforts = _urdf_joint_efforts()
-    for joint in spec.joints:
-        if joint.type != mujoco.mjtJoint.mjJNT_HINGE:
-            continue
-        name = joint.name
-        suffix = name.replace("_joint", "")
-        base = suffix.rsplit("_", 1)[0] if False else suffix
-        # map e.g. left_hip_pitch -> 150
-        eff = None
-        for jn, e in efforts.items():
-            if jn.replace("_joint", "") == suffix:
-                eff = e
-                break
-        assert eff is not None, f"no effort limit for {name}"
-        spec.add_motor(name=f"motor_{suffix}", target=joint,
-                       ctrlrange=[-eff, eff], gear=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     model = spec.compile()
-
-    # contact parity: make every robot geom collidable (URDF visual meshes are
-    # imported inert; convex hulls of collision meshes then collide like PhysX)
-    n_flipped = 0
-    for g in range(model.ngeom):
-        if model.geom_contype[g] == 0 and model.geom_conaffinity[g] == 0:
-            b = model.geom_bodyid[g]
-            if b != 0:  # robot bodies only
-                model.geom_contype[g] = 1
-                model.geom_conaffinity[g] = 1
-                n_flipped += 1
+    if model.nu == 0:
+        raise RuntimeError(
+            "URDF importer produced no actuators in this mujoco version; "
+            "rerun with --model mjcf (patched handwritten model)"
+        )
+    efforts = _urdf_joint_efforts()
+    for a in range(model.nu):
+        jid = int(model.actuator_trnid[a, 0])
+        jname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jid) or ""
+        eff = efforts.get(jname)
+        if eff is None:
+            continue
+        lo, hi = model.actuator_ctrlrange[a]
+        assert abs(lo + eff) < 1e-6 and abs(hi - eff) < 1e-6, (
+            f"ctrlrange mismatch for {jname}: [{lo},{hi}] vs +/-{eff}"
+        )
     print(f"[sim2sim] URDF-direct model: njnt={model.njnt} nu={model.nu} "
-          f"ngeom={model.ngeom} (visual geoms made collidable: {n_flipped})")
+          f"ngeom={model.ngeom}; motor ctrlranges verified against URDF efforts")
     return model
 
 
@@ -362,16 +350,25 @@ class VideoWriter:
 # rollout                                                                      #
 # --------------------------------------------------------------------------- #
 def build_joint_maps(mujoco, model):
-    """Name-based index maps: policy(interleaved) order <-> mujoco storage."""
-    mj_ids = np.array(
-        [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in POLICY_JOINT_ORDER]
-    )
-    assert (mj_ids >= 0).all(), f"missing joints in mjcf: {mj_ids}"
+    """Name-based index maps: policy(interleaved) order <-> mujoco storage.
+
+    Joint lookup tries both the bare name and the URDF-style '<name>_joint'
+    form (the direct URDF model keeps the full URDF joint names).
+    """
+    def jid_of(name):
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if jid < 0:
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name + "_joint")
+        return jid
+
+    mj_ids = np.array([jid_of(n) for n in POLICY_JOINT_ORDER])
+    assert (mj_ids >= 0).all(), f"missing joints in model: {mj_ids}"
     qpos_adr = model.jnt_qposadr[mj_ids].copy()
     dof_adr = model.jnt_dofadr[mj_ids].copy()
     act_for_joint = {}
     for a in range(model.nu):
         act_for_joint[int(model.actuator_trnid[a, 0])] = a
+    assert len(act_for_joint) >= len(mj_ids), f"model has {model.nu} actuators"
     act_adr = np.array([act_for_joint[int(i)] for i in mj_ids])
     cr = model.actuator_ctrlrange[act_adr].copy()  # (12,2) in policy order
     print(f"[sim2sim] joint map (policy order -> mujoco qpos adr): {qpos_adr.tolist()}")
@@ -385,8 +382,23 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
     data.qpos[2] = INIT_HEIGHT  # match training spawn (init_state_z), not the mjcf 0.8
     mujoco.mj_step(model, data)
 
-    torso_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b) for b in TORSO_BODIES]
-    foot_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b) for b in FOOT_BODIES]
+    def _bid(name_candidates):
+        for nm in name_candidates:
+            i = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, nm)
+            if i >= 0:
+                return i
+        raise RuntimeError(f"no torso/foot body among {name_candidates}")
+
+    torso_ids = [
+        _bid(["x1-body", "base_link"]),
+        _bid(["body_yaw", "lumber_yaw"]),
+        _bid(["body_roll", "lumber_roll"]),
+        _bid(["body_pitch", "lumber_pitch"]),
+    ]
+    foot_ids = [
+        _bid(["left_ankle_roll_link", "left_ankle_roll"]),
+        _bid(["right_ankle_roll_link", "right_ankle_roll"]),
+    ]
     renderer = None
     video_writer = None
     cam = None
