@@ -503,6 +503,14 @@ def main():
     print(f"[sim2sim] mujoco model: {MJCF_PATH}")
     model = mujoco.MjModel.from_xml_path(MJCF_PATH)
     model.opt.timestep = SIM_DT
+    # training-parity fix: the shipped mjcf sets joint damping=1 on all 12 leg
+    # joints while the URDF (training side) declares none (solver-side damping
+    # 0; motor damping is emulated in the explicit PD). Zero it out here.
+    for jn in range(model.njnt):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        if name and ("hip" in name or "knee" in name or "ankle" in name):
+            model.dof_damping[model.jnt_dofadr[jn]] = 0.0
+    print(f"[sim2sim] leg joint damping zeroed for training parity")
     # enlarge the offscreen framebuffer (the shipped mjcf caps it at 640 px)
     model.vis.global_.offwidth = max(args.width, 640)
     model.vis.global_.offheight = max(args.height, 480)
