@@ -67,6 +67,8 @@
 
 修复 #1–#5 后仍于 ~1.8s 崩塌（崩塌形态：stand 中 pitch 逐渐积累至 −0.15 → 向后漂移 → roll 发散、力矩饱和），而 IsaacLab 中同策略 24s 稳定。剩余差异不在模型文件层（质量/几何/关节约定已逐项核对一致），而在**求解器与接触模型层**：PhysX TGS（4 iter，contact_offset/rest_offset、0.6/0.6 摩擦）vs mjcf Euler（solref=(0.005,1)，friction=1，condim=3）。此类差异通常由「跨物理引擎域随机化」吸收，而本策略训练时的域随机化仅覆盖 PhysX。
 
+**URDF 直载路线证伪**（TASK_20260828_074/115，commit `2dc7da1`/`788bc2a`）：环境内 mujoco 的 URDF importer 不生成 actuator（nu=0），且该版本 MjSpec 无 `add_motor` API——直接加载训练 URDF 的路线在本镜像不可行，脚本按设计明确报错。结论：S1 攻坚需走训练端跨引擎接触随机化（域随机化覆盖 mjcf 等效接触参数），属新一轮训练迭代。
+
 ## 4. 交付物清单
 
 | 交付物 | 位置 |
