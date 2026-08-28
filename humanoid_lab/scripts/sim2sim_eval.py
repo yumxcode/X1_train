@@ -69,6 +69,7 @@ from humanoid_lab.scripts.export_policy_lab import find_checkpoint, load_exporte
 
 MJCF_PATH = os.path.join(_REPO_ROOT, "resources", "robots", "x1", "mjcf", "xyber_x1_flat.xml")
 MJCF_PATCHED_PATH = os.path.join(_REPO_ROOT, "resources", "robots", "x1", "mjcf", "xyber_x1_flat_patched.xml")
+URDF_PATH = os.path.join(_REPO_ROOT, "resources", "robots", "x1", "urdf", "x1.urdf")
 
 import re as _re
 
@@ -76,6 +77,80 @@ _SPHERE_RE = _re.compile(
     r'<geom\s+type\s*=\s*"sphere"\s+size\s*=\s*"0\.002"\s+'
     r'pos\s*=\s*"([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"\s+class\s*=\s*"collision"\s*/>'
 )
+
+
+def _urdf_joint_efforts():
+    """joint name -> effort limit, parsed from the training URDF."""
+    import xml.etree.ElementTree as ET
+
+    out = {}
+    for j in ET.parse(URDF_PATH).getroot().findall("joint"):
+        lim = j.find("limit")
+        if j.get("type") == "revolute" and lim is not None:
+            out[j.get("name")] = float(lim.get("effort"))
+    return out
+
+
+def build_model_urdf_direct(mujoco):
+    """Build the mujoco model DIRECTLY from the training URDF via MjSpec.
+
+    This removes every remaining file-layer difference to the training asset
+    (inertials, convex-hull collision meshes incl. a full flat sole, joint
+    limits, no joint damping). Motors are attached per joint with the URDF
+    effort limits as ctrlrange; a plane floor is added.
+    """
+    spec = mujoco.MjSpec.from_file(URDF_PATH)
+    # floor
+    spec.worldbody.add_geom(
+        name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE,
+        size=[0.0, 0.0, 1.0], friction=[1.0, 1.0, 1.0],
+    )
+    # motors with URDF effort limits
+    efforts = _urdf_joint_efforts()
+    for joint in spec.joints:
+        if joint.type != mujoco.mjtJoint.mjJNT_HINGE:
+            continue
+        name = joint.name
+        suffix = name.replace("_joint", "")
+        base = suffix.rsplit("_", 1)[0] if False else suffix
+        # map e.g. left_hip_pitch -> 150
+        eff = None
+        for jn, e in efforts.items():
+            if jn.replace("_joint", "") == suffix:
+                eff = e
+                break
+        assert eff is not None, f"no effort limit for {name}"
+        spec.add_motor(name=f"motor_{suffix}", target=joint,
+                       ctrlrange=[-eff, eff], gear=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    model = spec.compile()
+
+    # contact parity: make every robot geom collidable (URDF visual meshes are
+    # imported inert; convex hulls of collision meshes then collide like PhysX)
+    n_flipped = 0
+    for g in range(model.ngeom):
+        if model.geom_contype[g] == 0 and model.geom_conaffinity[g] == 0:
+            b = model.geom_bodyid[g]
+            if b != 0:  # robot bodies only
+                model.geom_contype[g] = 1
+                model.geom_conaffinity[g] = 1
+                n_flipped += 1
+    print(f"[sim2sim] URDF-direct model: njnt={model.njnt} nu={model.nu} "
+          f"ngeom={model.ngeom} (visual geoms made collidable: {n_flipped})")
+    return model
+
+
+def build_model_mjcf_patched(mujoco):
+    """Legacy handwritten-mjcf path with parity patches (see git history)."""
+    soles = _patch_foot_soles(MJCF_PATH)
+    print(f"[sim2sim] foot sole patched to flat boxes ({soles} corner spheres replaced)")
+    model = mujoco.MjModel.from_xml_path(MJCF_PATCHED_PATH)
+    model.opt.timestep = SIM_DT
+    for jn in range(model.njnt):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        if name and ("hip" in name or "knee" in name or "ankle" in name):
+            model.dof_damping[model.jnt_dofadr[jn]] = 0.0
+    print(f"[sim2sim] leg joint damping zeroed for training parity")
+    return model
 
 
 def _patch_foot_soles(xml_path: str) -> int:
@@ -336,7 +411,7 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
         k: []
         for k in ("t", "cmd_vx", "cmd_vy", "cmd_wz", "vx", "vy", "wz", "base_z",
                   "roll", "pitch", "tau_max_abs", "tau_sat", "foot_l", "foot_r",
-                  "torso_contact", "base_x", "base_y")
+                  "torso_contact", "base_x", "base_y", "q", "target_q")
     }
     fall = None  # (t, reason)
     count_lowlevel = 0
@@ -359,7 +434,10 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
         eu_ang[eu_ang > math.pi] -= 2 * math.pi
         base_pos = data.qpos[:3].astype(np.double)
 
-        foot_contact = [abs(data.cfrc_ext[i][2]) > 5.0 for i in foot_ids]
+        # cfrc_ext spatial layout is [torque(3), force(3)]; vertical ground
+        # reaction is force-z = index 5 (the original script's index 2 was
+        # torque-z — a latent metrics bug).
+        foot_contact = [abs(data.cfrc_ext[i][5]) > 5.0 for i in foot_ids]
         torso_contact = any(
             np.linalg.norm(data.cfrc_ext[i]) > 1.0 for i in torso_ids
         )
@@ -429,6 +507,8 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
             rec["torso_contact"].append(bool(torso_contact))
             rec["base_x"].append(base_pos[0])
             rec["base_y"].append(base_pos[1])
+            rec["q"].append(q.tolist())            # policy-order joint pos
+            rec["target_q"].append((target_q + DEFAULT_DOF_POS).tolist())
 
         # --- render ----------------------------------------------------------------
         if renderer is not None and step % render_every == 0:
@@ -568,6 +648,9 @@ def main():
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--out_dir", type=str, default="")
+    parser.add_argument("--model", type=str, default="urdf", choices=["urdf", "mjcf"],
+                        help="urdf: load the training URDF directly via MjSpec (exact "
+                             "file parity); mjcf: legacy handwritten mjcf with patches")
     parser.add_argument("--trials", type=str, default="forward,omni,max")
     parser.add_argument("--allow_fail", action="store_true",
                         help="exit 0 even on FAIL (pipeline smoke tests)")
@@ -592,24 +675,14 @@ def main():
     policy = torch.jit.script(exported)
     policy.eval()
 
-    # training-parity fix: the mjcf foot collider is four r=2mm point spheres
-    # at the sole corners, while the URDF->USD training asset uses the convex
-    # hull of the whole foot mesh (a FLAT sole). Replacing the corner points
-    # with a flat box sole matching the corner extents (attempted r=30mm
-    # spheres first -> ball bearings, worse; a box reproduces the flat
-    # contact patch the stance policy relies on).
-    soles = _patch_foot_soles(MJCF_PATH)
-    print(f"[sim2sim] foot sole patched to flat boxes ({soles} corner spheres replaced)")
-    model = mujoco.MjModel.from_xml_path(MJCF_PATCHED_PATH)
+    # model construction: 'urdf' = load the training URDF directly via MjSpec
+    # (exact file-layer parity with the training asset); 'mjcf' = legacy
+    # handwritten mjcf with parity patches (see git history).
+    if args.model == "urdf":
+        model = build_model_urdf_direct(mujoco)
+    else:
+        model = build_model_mjcf_patched(mujoco)
     model.opt.timestep = SIM_DT
-    # training-parity fix: the shipped mjcf sets joint damping=1 on all 12 leg
-    # joints while the URDF (training side) declares none (solver-side damping
-    # 0; motor damping is emulated in the explicit PD). Zero it out here.
-    for jn in range(model.njnt):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
-        if name and ("hip" in name or "knee" in name or "ankle" in name):
-            model.dof_damping[model.jnt_dofadr[jn]] = 0.0
-    print(f"[sim2sim] leg joint damping zeroed for training parity")
     # enlarge the offscreen framebuffer (the shipped mjcf caps it at 640 px)
     model.vis.global_.offwidth = max(args.width, 640)
     model.vis.global_.offheight = max(args.height, 480)
@@ -629,8 +702,12 @@ def main():
         all_checks.update({f"{k}[{name}]": v for k, v in checks.items()})
         travel[name] = stats.get("net_forward_disp", stats.get("travel_xy", 0.0))
         results[name] = {"checks": checks, "stats": stats, "fall": fall}
-        metrics_pack[name] = {k: (v[::10].tolist() if isinstance(v, np.ndarray) and v.ndim == 1 else None)
-                              for k, v in rec.items()}
+        def _pack(v):
+            if isinstance(v, np.ndarray):
+                return v[::10].tolist()
+            return None
+
+        metrics_pack[name] = {k: _pack(v) for k, v in rec.items()}
         print(json.dumps(stats, indent=2))
 
     video_checks, video_stats = evaluate_videos(out_dir, trial_names, travel)
