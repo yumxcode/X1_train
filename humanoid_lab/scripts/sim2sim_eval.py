@@ -559,6 +559,21 @@ def main():
         if name and ("hip" in name or "knee" in name or "ankle" in name):
             model.dof_damping[model.jnt_dofadr[jn]] = 0.0
     print(f"[sim2sim] leg joint damping zeroed for training parity")
+
+    # training-parity fix: the mjcf foot collider is four r=2mm point spheres
+    # at the sole corners, while the URDF->USD training asset uses the convex
+    # hull of the whole foot mesh (a full sole). A single-foot stance cannot
+    # establish on point contacts. Enlarge the corner spheres to approximate
+    # the URDF sole (rounded rectangle ~ sole extent).
+    n_enlarged = 0
+    for gn in range(model.ngeom):
+        gid_body = model.geom_bodyid[gn]
+        body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(gid_body)) or ""
+        if ("ankle_roll" in body_name) and model.geom_type[gn] == mujoco.mjtGeom.mjGEOM_SPHERE \
+                and model.geom_size[gn, 0] <= 0.005 and model.geom_contype[gn] != 0:
+            model.geom_size[gn, 0] = 0.03
+            n_enlarged += 1
+    print(f"[sim2sim] foot sole spheres enlarged to r=0.03 ({n_enlarged} geoms) for training parity")
     # enlarge the offscreen framebuffer (the shipped mjcf caps it at 640 px)
     model.vis.global_.offwidth = max(args.width, 640)
     model.vis.global_.offheight = max(args.height, 480)
