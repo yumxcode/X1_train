@@ -6,9 +6,9 @@
 
 | 维度 | 结果 | 说明 |
 |---|---|---|
-| A. 训练 T1–T6 | **4/6 通过**（T2/T5/T6 过，T1/T3/T4 未达） | 20,000 iters（原版配方满量程），曲线仍在上行 |
+| A. 训练 T1–T6 | **4/6 通过**（T2/T5/T6 过，T1/T3/T4 未达） | 总 32,000 iters（原版配方 1.6×），增长平台化（拖步局部最优，见 §2） |
 | B. sim2sim S1–S6 | **FAIL**（S1 未过：6 轮修复后 stand 存活 1.81s） | 修复链见 §3.1；剩余差距为求解器/接触模型级差异 |
-| **总判定** | **PARTIAL PASS**（如实报告，未降低阈值） | 训练侧超额完成原基线 15 倍；sim2sim 管线与诊断链完整交付 |
+| **总判定** | **PARTIAL PASS**（如实报告，未降低阈值） | 训练侧超额完成原基线 17 倍；sim2sim 管线与诊断链完整交付 |
 
 ## 2. 训练结果（gradmotion 远端 IsaacSim 5.0 + IsaacLab 2.2）
 
@@ -19,20 +19,21 @@
 | v1 TASK_20260827_024 | 0–1000 | 6.7→7.7 | 307 | 冒烟级基线 |
 | v2 TASK_20260827_065 | 1000–7999 | 7.7→98.2 | 2204 | effort 限幅 bug 在此段暴露 |
 | v3b TASK_20260827_172 | 8000–9820 | →103 | 2187 | 真实限幅下训练；账号余额中断 |
-| v3c TASK_20260827_196 | 9800–20000 | →116.7 | 2258 | 最终模型 `model_20000.pt` |
+| v3c TASK_20260827_196 | 9800–20000 | →116.7 | 2258 | 原配方满量程 |
+| v4 TASK_20260828_072 | 20000–32000 | →135.1 | 2342 | 追加一轮（原配方 1.6×）；增长平台化 |
 
-**T1–T6（last-100，严格阈值见 PASS_CRITERIA.md）**：
+**T1–T6（v4 终值，last-100，严格阈值见 PASS_CRITERIA.md）**：
 
-| ID | 指标 | 实测 | 阈值 | 判定 |
-|---|---|---|---|---|
-| T1 | mean_reward | 117.5 | ≥200 | **FAIL**（仍在升：v2→v3c +19/12k iters） |
-| T2 | episode_length | 2258 | ≥2100 | PASS |
-| T3 | tracking_lin_vel | 0.94 | ≥1.20 | FAIL（收敛中） |
-| T4 | ref_joint_pos | 1.16 | ≥1.40 | FAIL（接近） |
-| T5 | collision | ≈0 | ≥−0.005 | PASS |
-| T6 | 末端无崩塌 | 0.94×max | ≥0.9×max | PASS |
+| ID | 指标 | v3c@20k | v4@32k | 阈值 | 判定 |
+|---|---|---|---|---|---|
+| T1 | mean_reward | 117.5 | **135.1** | ≥200 | FAIL |
+| T2 | episode_length | 2258 | **2342** | ≥2100 | PASS |
+| T3 | tracking_lin_vel | 0.94 | **0.95** | ≥1.20 | FAIL |
+| T4 | ref_joint_pos | 1.16 | **1.26** | ≥1.40 | FAIL |
+| T5 | collision | ≈0 | ≈0 | ≥−0.005 | PASS |
+| T6 | 末端无崩塌 | 0.94×max | **0.95×max** | ≥0.9×max | PASS |
 
-诊断：`feet_air_time` 仍低（拖步步态未完全成型），速度跟踪与步态参考奖励为主要缺口——是**训练量不足**（原版配方 20k iters 已跑满，但 IsaacLab 迁移管线起点较晚、中途更换 effort 限幅重适应 ~2000 iters），非管线错误。曲线数据归档：`logs_analysis/train_walk_curves.json`。
+**增长平台化诊断**（两轮追加共 +12k iters 后 T1 仅 +18、T3 +0.02）：`feet_air_time`≈0.006/s（scale 1.2）恒定——策略收敛到**拖步局部最优**：脚从不离地 → `feet_air_time` 奖励（需先腾空积累）从未激活 → 无抬脚梯度。属 reward 结构的冷启动问题（feet_air_time 需先有非接触时间才能产生信号），非训练量问题。曲线数据归档：`logs_analysis/train_walk_curves.json`（v1–v4 全链）。
 
 ## 3. Sim2sim（Mujoco，远端执行 + mp4 录制）
 
@@ -85,9 +86,10 @@
 
 ## 5. 后续建议（若需完全达标）
 
-1. **训练量**（解决 T1/T3/T4）：v3c 曲线未饱和，差距分别约 40%/22%/17%——resume +10k~15k iters（约 4–6 h GPU）大概率收敛达标。
-2. **sim2sim**（解决 S1–S6），按性价比排序：
-   a. **逐关节 A/B 定位**：`gm_play/diag_isaaclab_stand.pt`（IsaacLab 24s 逐关节 q/action）与 062 的 `verdict.pt`（mujoco 时序）已具备，对比首个发散关节即可锁定剩余失配（预计指向接触求解参数）。
-   b. **跨引擎域随机化**：在训练端对 `solref/friction/condim` 等效参数（接触刚度、摩擦系数 0.6→1.0、地面刚度）做随机化，让策略对两类求解器都鲁棒——这是 IsaacGym→mujoco 成功管线的通用做法。
-   c. **换部署模型**：mujoco 直接加载 URDF（`<mujoco><compiler>` 标签已在 urdf 内置）替代手写 mjcf，消除文件层差异（此项已在 #1–#5 证明收益有限，优先级最低）。
-3. **预算**：账号池 1/2 已耗尽，34/35 余额有限；下一轮迭代前请充值或补充号池。
+1. **打破拖步局部最优**（解决 T1/T3/T4 的共同根因）：`feet_air_time` 奖励存在冷启动死区（脚不离地→无信号→无抬脚梯度）。可行改法（择一，均偏离原配方需重新验证）：
+   - 给 `feet_clearance`（已有 scale 1.0，last100≈0.005 几乎未激活）加相位门控的期望抬脚高度，提供不依赖腾空历史的抬脚梯度；
+   - 或 action noise 高退火阶段（当前 init_noise_std=1.0）延长，让随机探索先触发抬脚；
+   - 或对称参考步态 bootstrap：前 N iters 用 `ref_dof_pos`（已有 final_swing_joint_delta_pos）做弱模仿引导。
+2. **sim2sim**（解决 S1–S6）：训练端做跨引擎接触域随机化（friction 已有 0.2–1.3 覆盖 mjcf 的 1.0；需补接触刚度/阻尼等效参数随机化），让策略对 PhysX TGS 与 mjcf Euler 两类求解器都鲁棒——这是 IsaacGym→mujoco 成功管线的通用做法。URDF 直载路线已在本环境证伪（§3.3）。
+3. **逐关节 A/B 数据已备**：`gm_play/diag_isaaclab_stand.pt`（IsaacLab 24s 逐关节 q/action）与 sim2sim verdict.pt（含逐关节 q/target_q，commit `788bc2a` 起）可直接对比首个发散关节。
+4. **预算**：账号 1/2 已耗尽；34/35 尚有余量但有限，下一轮迭代前请充值或补充号池。
