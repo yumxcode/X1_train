@@ -78,14 +78,30 @@ class X1DHStandEnv(DirectRLEnv):
         self.feet_indices, _ = self._robot.find_bodies(".*ankle_roll")
         self.knee_indices, _ = self._robot.find_bodies(".*knee_pitch")
         self.penalised_contact_indices, _ = self._robot.find_bodies("base_link")
-        # sanity: contact sensor must see the same body set as the articulation
-        sensor_bodies = self._contact_sensor.num_instances if hasattr(self._contact_sensor, "num_instances") else 0
-        if sensor_bodies != self._robot.num_bodies:
-            print(
-                f"[X1DHStandEnv] WARNING contact sensor bodies ({sensor_bodies}) "
-                f"!= articulation bodies ({self._robot.num_bodies}); "
-                "contact indexing may be misaligned"
-            )
+
+        # ContactSensor body order != articulation body order in general.
+        # Build the permutation sensor_idx -> articulation_idx ONCE by name so
+        # that downstream find_bodies indices index the sensor tensor safely.
+        sensor_body_names = list(self._contact_sensor.body_names)
+        robot_body_names = list(self._robot.body_names)
+        perm = []
+        for s_name in sensor_body_names:
+            if s_name in robot_body_names:
+                perm.append(robot_body_names.index(s_name))
+            else:
+                print(f"[X1DHStandEnv] WARNING sensor body '{s_name}' absent from articulation; mapping to 0")
+                perm.append(0)
+        # gather index: out[:, robot_idx] = sensor_forces[:, sensor_idx]
+        gather = [0] * self._robot.num_bodies
+        for sensor_idx, robot_idx in enumerate(perm):
+            gather[robot_idx] = sensor_idx
+        self._sensor_perm = torch.tensor(gather, dtype=torch.long, device=self.device)
+        order_ok = all(si == ri for si, ri in enumerate(perm))
+        print(f"[X1DHStandEnv] contact sensor body order == articulation order: {order_ok}")
+        if not order_ok:
+            print(f"[X1DHStandEnv] sensor->articulation scatter perm: {perm}")
+            print(f"[X1DHStandEnv] sensor bodies: {sensor_body_names}")
+            print(f"[X1DHStandEnv] robot bodies : {robot_body_names}")
 
         # ---------------- joint ordering helpers --------------------------
         self.dof_names = list(self._robot.joint_names)
@@ -264,7 +280,14 @@ class X1DHStandEnv(DirectRLEnv):
 
     @property
     def contact_forces(self) -> torch.Tensor:
-        return self._contact_sensor.data.net_forces_w  # (num_envs, num_bodies, 3)
+        # ContactSensor body ordering is NOT guaranteed to match the
+        # articulation's body ordering. All downstream indices (feet/knee/
+        # penalised) come from robot.find_bodies(), so permute the sensor
+        # tensor into articulation order here (_sensor_perm built at init).
+        # A silent mismatch zeroed feet_air_time/feet_clearance for the whole
+        # v1-v4 training chain (shuffling local optimum).
+        raw = self._contact_sensor.data.net_forces_w
+        return raw[:, self._sensor_perm]  # (num_envs, num_bodies, 3) articulation order
 
     @property
     def rigid_state(self) -> torch.Tensor:
