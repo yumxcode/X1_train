@@ -682,8 +682,12 @@ def main():
                         help="mjcf: handwritten mjcf with parity patches (urdf-direct is "
                              "falsified in this image: importer emits no actuators)")
     parser.add_argument("--trials", type=str, default="forward,omni,max")
-    parser.add_argument("--allow_fail", action="store_true",
-                        help="exit 0 even on FAIL (pipeline smoke tests)")
+    parser.add_argument("--no_policy", action="store_true", default=False,
+                        help="zero-action control test: hold the default pose with pure "
+                             "PD (no policy). If THIS collapses the model/physics is "
+                             "broken; if it stands, blame the policy.")
+    parser.add_argument("--settle_steps", type=int, default=100,
+                        help="physics steps to settle the spawn before logging starts")
     args = parser.parse_args()
 
     # live logs on gradmotion (SDK tails stdout)
@@ -704,6 +708,15 @@ def main():
     exported = load_exported_policy(ckpt)
     policy = torch.jit.script(exported)
     policy.eval()
+    if args.no_policy:
+        # zero-action control: policy replaced by constant-zero action (pure PD
+        # holding the default pose). Distinguishes broken model/physics from a
+        # brittle policy.
+        _real_policy = policy
+
+        def policy(obs):
+            return torch.zeros(1, NUM_ACTIONS)
+        print("[sim2sim] NO-POLICY control test active (pure PD at default pose)")
 
     # model construction: 'urdf' = load the training URDF directly via MjSpec
     # (exact file-layer parity with the training asset); 'mjcf' = legacy
