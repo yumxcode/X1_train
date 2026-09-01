@@ -660,9 +660,9 @@ def main():
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--out_dir", type=str, default="")
-    parser.add_argument("--model", type=str, default="urdf", choices=["urdf", "mjcf"],
-                        help="urdf: load the training URDF directly via MjSpec (exact "
-                             "file parity); mjcf: legacy handwritten mjcf with patches")
+    parser.add_argument("--model", type=str, default="mjcf", choices=["urdf", "mjcf"],
+                        help="mjcf: handwritten mjcf with parity patches (urdf-direct is "
+                             "falsified in this image: importer emits no actuators)")
     parser.add_argument("--trials", type=str, default="forward,omni,max")
     parser.add_argument("--allow_fail", action="store_true",
                         help="exit 0 even on FAIL (pipeline smoke tests)")
