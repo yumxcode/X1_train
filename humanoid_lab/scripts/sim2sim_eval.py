@@ -282,9 +282,9 @@ TRIALS = {
     ],
     "max": [(0.0, 2.0, (0.0, 0.0, 0.0)), (2.0, 21.0, (1.2, 0.0, 0.0)), (21.0, 24.0, (0.0, 0.0, 0.0))],
 }
-INIT_HEIGHT = 0.62  # spawn settled: mjcf resting height ~0.61 (IsaacLab episodes start
-# on-ground at 0.578 after reset; spawning at the mjcf default 0.7 gives a 9cm
-# ballistic drop + 1.33 m/s impact the policy never saw in training)
+INIT_HEIGHT = 0.70  # EXACT training parity: cfg.env.init_state_z. Training resets
+# drop the robot from 0.7 every episode (settling height ~0.58-0.61) — the
+# ballistic drop is IN distribution, so we replicate it exactly.
 GRACE_S = 1.0  # excluded from tracking stats after each command switch
 
 
@@ -488,18 +488,26 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
             if SW_SWITCH and vel_norm <= STAND_COM_THRESHOLD:
                 count_lowlevel = 0
 
-            obs = np.zeros([1, NUM_SINGLE_OBS], dtype=np.float32)
-            phase_t = count_lowlevel * SIM_DT
-            obs[0, 0] = math.sin(2 * math.pi * phase_t / CYCLE_TIME)
-            obs[0, 1] = math.cos(2 * math.pi * phase_t / CYCLE_TIME)
-            obs[0, 2] = vx_cmd * OBS_SCALE_LIN_VEL
-            obs[0, 3] = vy_cmd * OBS_SCALE_LIN_VEL
-            obs[0, 4] = wz_cmd * OBS_SCALE_ANG_VEL
-            obs[0, NUM_COMMANDS:NUM_COMMANDS + NUM_ACTIONS] = (q - DEFAULT_DOF_POS) * OBS_SCALE_DOF_POS
-            obs[0, NUM_COMMANDS + NUM_ACTIONS:NUM_COMMANDS + 2 * NUM_ACTIONS] = dq * OBS_SCALE_DOF_VEL
-            obs[0, NUM_COMMANDS + 2 * NUM_ACTIONS:NUM_COMMANDS + 3 * NUM_ACTIONS] = action
-            obs[0, NUM_COMMANDS + 3 * NUM_ACTIONS:NUM_COMMANDS + 3 * NUM_ACTIONS + 3] = omega
-            obs[0, NUM_COMMANDS + 3 * NUM_ACTIONS + 3:NUM_COMMANDS + 3 * NUM_ACTIONS + 6] = eu_ang
+            if count_lowlevel == 0 and step == 0:
+                # EXACT training reset parity: obs_dump probe proved the env
+                # returns an ALL-ZERO observation vector on the first policy
+                # step after reset (obs_buf zeroed; sin=cos=0 is physically
+                # impossible — it is the zeroed buffer, not a real phase).
+                # The policy was trained on this exact input every episode.
+                obs = np.zeros([1, NUM_SINGLE_OBS], dtype=np.float32)
+            else:
+                obs = np.zeros([1, NUM_SINGLE_OBS], dtype=np.float32)
+                phase_t = count_lowlevel * SIM_DT
+                obs[0, 0] = math.sin(2 * math.pi * phase_t / CYCLE_TIME)
+                obs[0, 1] = math.cos(2 * math.pi * phase_t / CYCLE_TIME)
+                obs[0, 2] = vx_cmd * OBS_SCALE_LIN_VEL
+                obs[0, 3] = vy_cmd * OBS_SCALE_LIN_VEL
+                obs[0, 4] = wz_cmd * OBS_SCALE_ANG_VEL
+                obs[0, NUM_COMMANDS:NUM_COMMANDS + NUM_ACTIONS] = (q - DEFAULT_DOF_POS) * OBS_SCALE_DOF_POS
+                obs[0, NUM_COMMANDS + NUM_ACTIONS:NUM_COMMANDS + 2 * NUM_ACTIONS] = dq * OBS_SCALE_DOF_VEL
+                obs[0, NUM_COMMANDS + 2 * NUM_ACTIONS:NUM_COMMANDS + 3 * NUM_ACTIONS] = action
+                obs[0, NUM_COMMANDS + 3 * NUM_ACTIONS:NUM_COMMANDS + 3 * NUM_ACTIONS + 3] = omega
+                obs[0, NUM_COMMANDS + 3 * NUM_ACTIONS + 3:NUM_COMMANDS + 3 * NUM_ACTIONS + 6] = eu_ang
             obs = np.clip(obs, -CLIP_OBS, CLIP_OBS)
 
             hist_obs.append(obs)
