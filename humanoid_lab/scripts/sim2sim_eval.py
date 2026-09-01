@@ -176,7 +176,7 @@ def _patch_foot_soles(xml_path: str) -> int:
         r"(<geom type='mesh' mesh='(?:left|right)_ankle_roll'[^>]*?rgba=\"1 0\.5 1 1\")\s*/>",
         r'\1 contype="1" conaffinity="1" friction="1 1" />',
         text2,
-        flags=re.S,
+        flags=_re.S,
     )
     n_mesh = len(_re.findall(r"ankle_roll'[^>]*?contype=\"1\"", text2))
     print(f"[sim2sim] foot mesh collision enabled on {n_mesh} geoms")
