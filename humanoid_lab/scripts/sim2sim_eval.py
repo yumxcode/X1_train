@@ -688,6 +688,8 @@ def main():
                              "broken; if it stands, blame the policy.")
     parser.add_argument("--settle_steps", type=int, default=100,
                         help="physics steps to settle the spawn before logging starts")
+    parser.add_argument("--allow_fail", action="store_true",
+                        help="exit 0 even on FAIL (pipeline smoke tests)")
     args = parser.parse_args()
 
     # live logs on gradmotion (SDK tails stdout)
