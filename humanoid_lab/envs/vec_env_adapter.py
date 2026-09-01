@@ -40,6 +40,16 @@ class VecEnvAdapter:
     def device(self):
         return self.env.device
 
+    # obs-noise annealing passthrough (must be an explicit property: plain
+    # attribute assignment on the adapter would shadow the env attribute)
+    @property
+    def noise_level_factor(self):
+        return self.env.noise_level_factor
+
+    @noise_level_factor.setter
+    def noise_level_factor(self, value):
+        self.env.noise_level_factor = value
+
     @property
     def max_episode_length(self):
         return self.env.max_episode_length

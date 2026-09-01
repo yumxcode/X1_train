@@ -281,6 +281,23 @@ class CfgDomainRand:
     friction_range = [0.2, 1.3]
     restitution_range = [0.0, 0.4]
 
+    # --- PHYSICAL contact-material randomization (v6 cross-engine DR) -----
+    # Prior runs (v1-v5) NEVER applied friction to physics: env_frictions was
+    # a privileged-obs-only random value while the real contact pair friction
+    # stayed ~0.6 (terrain 0.6 averaged with the robot material). The mujoco
+    # sim2sim uses effective sliding friction 1.0 -> out-of-distribution.
+    # randomize_contact_friction writes robot-side PhysX material properties
+    # per env per reset so the EFFECTIVE pair friction (PhysX combines by
+    # average: mu_eff = (mu_robot + terrain_friction) / 2) covers the mujoco
+    # value with margin on both sides:
+    #   mu_eff ~ U(0.35, 1.25)  -> mu_robot = 2*mu_eff - 0.6 in [0.10, 1.90]
+    #   restitution_eff ~ U(0.0, 0.30) -> robot restitution in [0.0, 0.60]
+    # env_frictions (privileged obs) is set to the TRUE effective mu_eff.
+    randomize_contact_friction = True
+    contact_friction_range = [0.35, 1.25]
+    contact_restitution_range = [0.0, 0.3]
+    terrain_friction = 0.6  # fixed terrain material mu (scene.physics_material)
+
     push_robots = True
     push_interval_s = 4
     update_step = 2000 * 24
@@ -458,6 +475,12 @@ class X1DHStandCfgPPO:
         load_run = -1
         checkpoint = -1
         resume_path = None
+        # obs-noise annealing (v6): linearly scale env noise_level by
+        # max(floor, 1 - (it - anneal_start) / noise_anneal_iters).
+        # anneal_start = current_learning_iteration at learn() entry, so a
+        # resumed run anneals over its OWN iterations. 0 disables.
+        noise_anneal_iters = 0
+        noise_anneal_floor = 0.05
 
 
 @configclass

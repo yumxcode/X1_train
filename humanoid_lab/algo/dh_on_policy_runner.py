@@ -94,6 +94,7 @@ class DHOnPolicyRunner:
         self.tot_time = 0
         self.current_learning_iteration = 0
         self.it = 0
+        self._last_noise_factor = None
 
         _, _ = self.env.reset()
 
@@ -123,8 +124,25 @@ class DHOnPolicyRunner:
 
         tot_iter = self.current_learning_iteration + num_learning_iterations
 
+        # obs-noise annealing (v6): anneal relative to the iteration at learn()
+        # entry, so resumed runs anneal over their own additional iterations.
+        anneal_iters = int(self.cfg.get("noise_anneal_iters", 0) or 0)
+        anneal_floor = float(self.cfg.get("noise_anneal_floor", 0.05) or 0.05)
+        anneal_start = self.current_learning_iteration
+        if anneal_iters > 0:
+            print(
+                f"[runner] obs-noise anneal ON: factor 1.0 -> {anneal_floor} over "
+                f"{anneal_iters} iters (start {anneal_start})"
+            )
+
         for it in range(self.current_learning_iteration, tot_iter):
             self.it = it
+            if anneal_iters > 0:
+                noise_factor = max(
+                    anneal_floor, 1.0 - (it - anneal_start) / float(anneal_iters)
+                )
+                self.env.noise_level_factor = noise_factor
+                self._last_noise_factor = noise_factor
             start = time.time()
 
             obs_std, obs_mean = torch.std_mean(obs, dim=0)
@@ -218,6 +236,8 @@ class DHOnPolicyRunner:
         )
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
+        if getattr(self, "_last_noise_factor", None) is not None:
+            self.writer.add_scalar("Train/noise_level_factor", self._last_noise_factor, locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]

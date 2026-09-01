@@ -231,6 +231,20 @@ class X1DHStandEnv(DirectRLEnv):
         # noise
         self.add_noise = cfg.noise.add_noise
         self.noise_scale_vec = self._get_noise_scale_vec(cfg)
+        # obs-noise annealing factor (set per-iteration by the runner; 1.0 = off)
+        self.noise_level_factor = 1.0
+
+        # physical contact-material DR state (v6 cross-engine randomization)
+        self._material_buf = None
+        if getattr(cfg.domain_rand, "randomize_contact_friction", False):
+            self._terrain_mu = float(getattr(cfg.domain_rand, "terrain_friction", 0.6))
+            # (num_envs, num_shapes, 3) CPU tensor: [static, dynamic, restitution]
+            self._material_buf = self._robot.root_physx_view.get_material_properties()
+            print(
+                f"[X1DHStandEnv] contact-material DR ON: material buffer "
+                f"{tuple(self._material_buf.shape)}, terrain mu={self._terrain_mu}, "
+                f"effective friction range {cfg.domain_rand.contact_friction_range}"
+            )
 
         # last states
         self.last_rigid_state = torch.zeros(self.num_envs, self.num_bodies, 13, device=self.device)
@@ -252,6 +266,9 @@ class X1DHStandEnv(DirectRLEnv):
         self.randomize_rigid_body_props(torch.arange(self.num_envs, device=self.device))
         if self.cfg.domain_rand.randomize_joint_armature:
             self._robot.write_joint_armature_to_sim(self.joint_armatures)
+        # make physics match env_frictions from the very first step
+        if self._material_buf is not None:
+            self._randomize_contact_materials(torch.arange(self.num_envs, device=self.device))
 
     # ------------------------------------------------------------------ #
     # Derived state views (IsaacLab tensors, world frame)                #
@@ -477,7 +494,7 @@ class X1DHStandEnv(DirectRLEnv):
         if self.add_noise:
             obs_now = obs_buf.clone() + (
                 2 * torch.rand_like(obs_buf) - 1
-            ) * self.noise_scale_vec * cfg.noise.noise_level
+            ) * self.noise_scale_vec * cfg.noise.noise_level * self.noise_level_factor
         else:
             obs_now = obs_buf.clone()
 
@@ -535,11 +552,13 @@ class X1DHStandEnv(DirectRLEnv):
             self.update_command_curriculum(env_ids)
 
         # resample randomized properties for the reset envs
-        # NOTE: mass/link-mass/friction randomization is applied ONCE at init
+        # NOTE: mass/link-mass randomization is applied ONCE at init
         # (mirrors the original pipeline, which set rigid body properties at
-        # env creation and only re-randomized DOF props on reset)
+        # env creation and only re-randomized DOF props on reset);
+        # contact friction/restitution IS re-randomized per episode (v6)
         self.randomize_dof_props(env_ids)
         self.randomize_lag_props(env_ids)
+        self._randomize_contact_materials(env_ids)
 
         # dof state: default + small noise, zero velocity
         dof_pos = self.default_dof_pos.expand(len(env_ids), -1) + torch_rand_float(
@@ -677,6 +696,52 @@ class X1DHStandEnv(DirectRLEnv):
             default_inertias = self._robot.data.default_inertia.clone().cpu()
             inertias[env_ids_cpu] = default_inertias[env_ids_cpu] * ratios.unsqueeze(-1)
             self._robot.root_physx_view.set_inertias(inertias, env_ids_cpu)
+
+    def _randomize_contact_materials(self, env_ids):
+        """Physical per-env contact friction/restitution randomization (v6).
+
+        Samples the TARGET EFFECTIVE pair properties and inverts them into
+        robot-side material values (PhysX combines pair friction/restitution
+        by average against the fixed terrain material), then writes them
+        through the articulation's material-property tensor. The privileged
+        env_frictions observation is updated to the true effective friction.
+        """
+        dr = self.cfg.domain_rand
+        if self._material_buf is None or len(env_ids) == 0:
+            return
+        n = len(env_ids)
+        mu_eff = torch_rand_float(
+            dr.contact_friction_range[0], dr.contact_friction_range[1],
+            (n, 1), device=self.device,
+        )
+        r_eff = torch_rand_float(
+            dr.contact_restitution_range[0], dr.contact_restitution_range[1],
+            (n, 1), device=self.device,
+        )
+        mu_robot = torch.clamp(2.0 * mu_eff - self._terrain_mu, min=0.0)
+        r_robot = torch.clamp(2.0 * r_eff, min=0.0)  # terrain restitution = 0
+
+        # privileged obs shows the true experienced (effective) friction
+        self.env_frictions[env_ids] = mu_eff
+
+        ids_cpu = env_ids.cpu()
+        num_shapes = self._material_buf.shape[1]
+        props = torch.stack(
+            (
+                mu_robot.expand(n, num_shapes),
+                mu_robot.expand(n, num_shapes),
+                r_robot.expand(n, num_shapes),
+            ),
+            dim=-1,
+        ).cpu()
+        self._material_buf[ids_cpu] = props
+        self._robot.root_physx_view.set_material_properties(self._material_buf, ids_cpu)
+        if self.common_step_counter < 3:
+            print(
+                f"[X1DHStandEnv] contact materials randomized for {n} envs: "
+                f"mu_eff in [{mu_eff.min().item():.3f}, {mu_eff.max().item():.3f}], "
+                f"mu_robot in [{mu_robot.min().item():.3f}, {mu_robot.max().item():.3f}]"
+            )
 
     def randomize_lag_props(self, env_ids):
         dr = self.cfg.domain_rand

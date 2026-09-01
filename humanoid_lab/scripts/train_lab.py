@@ -27,6 +27,12 @@ parser.add_argument("--resume_from_path", type=str, default="",
 parser.add_argument("--load_run", type=str, default="-1")
 parser.add_argument("--checkpoint", type=int, default=-1)
 parser.add_argument("--rl_device", type=str, default="cuda:0")
+parser.add_argument("--noise_anneal_iters", type=int, default=-1,
+                    help="linear obs-noise anneal to floor over N iters (v6); -1 keeps cfg default")
+parser.add_argument("--noise_anneal_floor", type=float, default=-1.0,
+                    help="obs-noise anneal floor (default 0.05)")
+parser.add_argument("--no_contact_dr", action="store_true", default=False,
+                    help="disable physical contact friction/restitution randomization")
 args_cli, unknown = parser.parse_known_args()
 
 # make the repo root (e.g. /workspace/isaaclab/X1_train) importable when the
@@ -138,6 +144,13 @@ def main(args):
     train_cfg.runner.resume = args.resume
     train_cfg.runner.load_run = args.load_run
     train_cfg.runner.checkpoint = args.checkpoint
+    if args.noise_anneal_iters >= 0:
+        train_cfg.runner.noise_anneal_iters = args.noise_anneal_iters
+    if args.noise_anneal_floor >= 0:
+        train_cfg.runner.noise_anneal_floor = args.noise_anneal_floor
+    if args.no_contact_dr:
+        env_cfg.domain_rand.randomize_contact_friction = False
+        print("[train_lab] physical contact-material DR DISABLED by flag")
 
     all_cfg = {"runner_class_name": train_cfg.runner_class_name}
     all_cfg.update(class_to_dict(train_cfg))
