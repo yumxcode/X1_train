@@ -141,29 +141,45 @@ def build_model_mjcf_patched(mujoco):
     return model
 
 
-def _patch_foot_soles(xml_path: str) -> int:
-    """Replace the four 2mm corner-point collision spheres of each foot with a
-    single flat box sole covering the same extent (URDF convex-hull parity).
+_MESH_SPHERE_BLOCK = None  # legacy regex retained for history
 
-    The corner spheres live in the INCLUDED robot xml, not the top-level file,
-    so we patch the robot xml into a *_patched* copy (same directory, meshdir
-    stays valid) and rewrite the top-level include accordingly.
+
+def _patch_foot_soles(xml_path: str) -> int:
+    """Foot-collision parity patch on the INCLUDED robot xml.
+
+    The mjcf ankle_roll body frame is rotated 90 deg about y vs the URDF
+    frame, so hand-placed primitives (the shipped four 2mm corner spheres, and
+    my earlier axis-guessed flat box, which was actually a vertical blade)
+    do NOT land where a sole belongs. The robust fix: enable collision on the
+    AUTHORED FOOT MESH itself (convex hull) — the same geometry family the
+    URDF->USD training asset collides with — and disable the corner spheres.
     """
     top = xml_path
     robot = os.path.join(os.path.dirname(xml_path), "robot", "xyber_x1", "xyber_x1_serial.xml")
     with open(robot, "r") as f:
         text = f.read()
 
-    def repl(m):
-        _x, y, _z = m.group(1), m.group(2), m.group(3)
-        return (
-            f'<geom type="box" size="0.032 0.012 0.072" '
-            f'pos="0 {y} 0" class="collision" />'
-        )
-
-    text2, n = _SPHERE_RE.subn(repl, text)
+    n = 0
+    out_lines = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        # drop the four 2mm corner-point collision spheres (both feet)
+        if stripped.startswith("<geom") and 'type = "sphere"' in stripped and 'size = "0.002"' in stripped:
+            n += 1
+            continue
+        out_lines.append(line)
+    text2 = "".join(out_lines)
     if not n:
         return 0
+    # enable collision on the foot mesh geoms (tags span two lines: ... rgba="..." />)
+    text2 = _re.sub(
+        r"(<geom type='mesh' mesh='(?:left|right)_ankle_roll'[^>]*?rgba=\"1 0\.5 1 1\")\s*/>",
+        r'\1 contype="1" conaffinity="1" friction="1 1" />',
+        text2,
+        flags=re.S,
+    )
+    n_mesh = len(_re.findall(r"ankle_roll'[^>]*?contype=\"1\"", text2))
+    print(f"[sim2sim] foot mesh collision enabled on {n_mesh} geoms")
     robot_patched = robot.replace("xyber_x1_serial.xml", "xyber_x1_serial_patched.xml")
     with open(robot_patched, "w") as f:
         f.write(text2)
