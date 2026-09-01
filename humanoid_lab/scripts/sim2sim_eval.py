@@ -266,7 +266,9 @@ TRIALS = {
     ],
     "max": [(0.0, 2.0, (0.0, 0.0, 0.0)), (2.0, 21.0, (1.2, 0.0, 0.0)), (21.0, 24.0, (0.0, 0.0, 0.0))],
 }
-INIT_HEIGHT = 0.70  # training parity: cfg.env.init_state_z (mjcf default 0.8 gives 2x impact energy)
+INIT_HEIGHT = 0.62  # spawn settled: mjcf resting height ~0.61 (IsaacLab episodes start
+# on-ground at 0.578 after reset; spawning at the mjcf default 0.7 gives a 9cm
+# ballistic drop + 1.33 m/s impact the policy never saw in training)
 GRACE_S = 1.0  # excluded from tracking stats after each command switch
 
 
