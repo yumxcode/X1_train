@@ -64,7 +64,8 @@ FRAME_STACK = 66
 
 
 def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
-                zero_angvel=False, settle_s=0.0, omega_from_qvel=False):
+                zero_angvel=False, settle_s=0.0, omega_from_qvel=False,
+                omega_tf=None):
     qpos_adr, dof_adr, act_adr, tau_lo, tau_hi = build_joint_maps(mujoco, model)
     data = mujoco.MjData(model)
     data.qpos[qpos_adr] = DEFAULT_DOF_POS
@@ -106,6 +107,8 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
         omega_qvel = rot.T @ data.qvel[3:6].astype(np.double)
         if omega_from_qvel:
             omega = omega_qvel
+        if omega_tf is not None:
+            omega = omega_tf(omega.copy())
         eu = quat_xyzw_to_euler(quat_xyzw)
         eu[eu > math.pi] -= 2 * math.pi
         base_pos = data.qpos[:3].astype(np.double)
@@ -192,7 +195,13 @@ def main():
 
     variants = []
     variants.append(("base", dict()))
-    variants.append(("omega_qvel", dict(omega_from_qvel=True)))
+    # axis sign-flip tests: if the mjcf gyro frame differs from the URDF base
+    # convention the policy was trained on, ONE of these will stabilize.
+    variants.append(("neg_x", dict(omega_tf=lambda w: w * np.array([-1.0, 1.0, 1.0]))))
+    variants.append(("neg_y", dict(omega_tf=lambda w: w * np.array([1.0, -1.0, 1.0]))))
+    variants.append(("neg_z", dict(omega_tf=lambda w: w * np.array([1.0, 1.0, -1.0]))))
+    # magnitude sensitivity test (OOD transient hypothesis)
+    variants.append(("half", dict(omega_tf=lambda w: w * 0.5)))
     variants.append(("no_angvel", dict(zero_angvel=True)))
 
     results = {}
