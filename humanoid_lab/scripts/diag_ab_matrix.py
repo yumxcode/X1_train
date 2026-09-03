@@ -65,7 +65,7 @@ FRAME_STACK = 66
 
 def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
                 zero_angvel=False, settle_s=0.0, omega_from_qvel=False,
-                omega_tf=None):
+                omega_tf=None, omega_ema_s=0.0):
     qpos_adr, dof_adr, act_adr, tau_lo, tau_hi = build_joint_maps(mujoco, model)
     data = mujoco.MjData(model)
     data.qpos[qpos_adr] = DEFAULT_DOF_POS
@@ -91,6 +91,8 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
 
     hist = [np.zeros([1, NUM_SINGLE_OBS]) for _ in range(FRAME_STACK)]
     action = np.zeros(NUM_ACTIONS)
+    omega_filt = np.zeros(3)
+    ema_alpha = None  # per-step EMA coefficient, set by variant
     rec = {"t": [], "z": [], "pitch": [], "roll": []}
     fall_t, fall_reason = None, None
     total = int(dur_s / SIM_DT)
@@ -109,6 +111,18 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
             omega = omega_qvel
         if omega_tf is not None:
             omega = omega_tf(omega.copy())
+        # IMU lowpass: EMA at 1 kHz with time constant omega_ema_s.
+        # Real gyros have limited bandwidth; training obs came from PhysX
+        # TGS whose velocity trajectories are inherently smoother than
+        # mujoco Euler contact ringing.
+        if omega_ema_s > 0:
+            if ema_alpha is None:
+                pass
+            a = 1.0 - math.exp(-SIM_DT / omega_ema_s)
+            omega_filt = omega_filt + a * (omega - omega_filt)
+            omega = omega_filt.copy()
+        else:
+            omega_filt = omega.copy()
         eu = quat_xyzw_to_euler(quat_xyzw)
         eu[eu > math.pi] -= 2 * math.pi
         base_pos = data.qpos[:3].astype(np.double)
@@ -195,13 +209,12 @@ def main():
 
     variants = []
     variants.append(("base", dict()))
-    # axis sign-flip tests: if the mjcf gyro frame differs from the URDF base
-    # convention the policy was trained on, ONE of these will stabilize.
-    variants.append(("neg_x", dict(omega_tf=lambda w: w * np.array([-1.0, 1.0, 1.0]))))
-    variants.append(("neg_y", dict(omega_tf=lambda w: w * np.array([1.0, -1.0, 1.0]))))
-    variants.append(("neg_z", dict(omega_tf=lambda w: w * np.array([1.0, 1.0, -1.0]))))
-    # magnitude sensitivity test (OOD transient hypothesis)
-    variants.append(("half", dict(omega_tf=lambda w: w * 0.5)))
+    # IMU bandwidth hypothesis: mujoco contact ringing (omega spikes +-1.5
+    # rad/s) sampled at 100 Hz is out-of-distribution for a policy trained
+    # on PhysX-smoothed velocities. EMA lowpass restores the bandwidth gap.
+    variants.append(("ema20ms", dict(omega_ema_s=0.020)))
+    variants.append(("ema50ms", dict(omega_ema_s=0.050)))
+    variants.append(("ema100ms", dict(omega_ema_s=0.100)))
     variants.append(("no_angvel", dict(zero_angvel=True)))
 
     results = {}
