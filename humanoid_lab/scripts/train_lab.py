@@ -134,6 +134,16 @@ def main(args):
     usd_path = ensure_x1_usd(usd_cache_dir)
     env_cfg.scene.robot.spawn.usd_path = usd_path
 
+    # env-affecting CLI overrides MUST happen BEFORE the env is constructed
+    # (the env bakes these into buffers at init; setting them later is dead)
+    if args.no_contact_dr:
+        env_cfg.domain_rand.randomize_contact_friction = False
+        print("[train_lab] physical contact-material DR DISABLED by flag")
+    if args.omega_dropout_prob >= 0:
+        env_cfg.noise.omega_dropout_prob = args.omega_dropout_prob
+    if args.ang_vel_noise_mult >= 0:
+        env_cfg.noise.ang_vel_noise_multiplier = args.ang_vel_noise_mult
+
     print(f"[train_lab] creating env with {args.num_envs} envs ...")
     env = X1DHStandEnv(cfg=env_cfg, render_mode=None)
     venv = VecEnvAdapter(env, env_cfg)
@@ -152,13 +162,6 @@ def main(args):
         train_cfg.runner.noise_anneal_iters = args.noise_anneal_iters
     if args.noise_anneal_floor >= 0:
         train_cfg.runner.noise_anneal_floor = args.noise_anneal_floor
-    if args.no_contact_dr:
-        env_cfg.domain_rand.randomize_contact_friction = False
-        print("[train_lab] physical contact-material DR DISABLED by flag")
-    if args.omega_dropout_prob >= 0:
-        env_cfg.noise.omega_dropout_prob = args.omega_dropout_prob
-    if args.ang_vel_noise_mult >= 0:
-        env_cfg.noise.ang_vel_noise_multiplier = args.ang_vel_noise_mult
 
     all_cfg = {"runner_class_name": train_cfg.runner_class_name}
     all_cfg.update(class_to_dict(train_cfg))
