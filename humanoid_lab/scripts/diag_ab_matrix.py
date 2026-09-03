@@ -209,12 +209,13 @@ def main():
 
     variants = []
     variants.append(("base", dict()))
-    # IMU bandwidth hypothesis: mujoco contact ringing (omega spikes +-1.5
-    # rad/s) sampled at 100 Hz is out-of-distribution for a policy trained
-    # on PhysX-smoothed velocities. EMA lowpass restores the bandwidth gap.
-    variants.append(("ema20ms", dict(omega_ema_s=0.020)))
-    variants.append(("ema50ms", dict(omega_ema_s=0.050)))
-    variants.append(("ema100ms", dict(omega_ema_s=0.100)))
+    # Amplitude-tail hypothesis: landing-impact omega spikes (|w|~1.5 rad/s)
+    # are tail-of-distribution vs training (gait |w|<0.5). Clamp keeps the
+    # small-signal gait feedback intact and only truncates the spikes --
+    # unlike half (destroys calibration) and EMA (filters gait band too).
+    variants.append(("clamp030", dict(omega_tf=lambda w: np.clip(w, -0.30, 0.30))))
+    variants.append(("clamp050", dict(omega_tf=lambda w: np.clip(w, -0.50, 0.50))))
+    variants.append(("clamp100", dict(omega_tf=lambda w: np.clip(w, -1.00, 1.00))))
     variants.append(("no_angvel", dict(zero_angvel=True)))
 
     results = {}
