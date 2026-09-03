@@ -123,3 +123,67 @@ v5（TASK_20260831_126 + 20260901_005）：22000 iters，reward 123.4、ep_len 2
 2. **sim2sim**（解决 S1–S6）：训练端做跨引擎接触域随机化（friction 已有 0.2–1.3 覆盖 mjcf 的 1.0；需补接触刚度/阻尼等效参数随机化），让策略对 PhysX TGS 与 mjcf Euler 两类求解器都鲁棒——这是 IsaacGym→mujoco 成功管线的通用做法。URDF 直载路线已在本环境证伪（§3.3）。
 3. **逐关节 A/B 数据已备**：`gm_play/diag_isaaclab_stand.pt`（IsaacLab 24s 逐关节 q/action）与 sim2sim verdict.pt（含逐关节 q/target_q，commit `788bc2a` 起）可直接对比首个发散关节。
 4. **预算**：账号 1/2 已耗尽；34/35 尚有余量但有限，下一轮迭代前请充值或补充号池。
+
+
+## 8. v6/v6.1 轮次（跨引擎接触 DR + ω 鲁棒性，2026-09-01 ~ 09-03）
+
+### 8.1 v6：物理接触摩擦 DR + obs 噪声退火（针对 §6.3 根因 1+2）
+
+| 改动 | 实现 | 任务 |
+|---|---|---|
+| **物理摩擦/恢复系数 DR**（此前从未写回物理） | 每 env 每 episode 采样有效摩擦 μ_eff~U(0.35,1.25)（覆盖 mujoco μ=1.0 及旧训练值 0.6），经 PhysX average 合成反演为 robot 侧材质 μ_r=2μ_eff-0.6 写入 material buffer (N,3,3)；restitution~U(0,0.3)。privileged obs 的 env_frictions 改报真实有效值 | smoke TASK_20260901_139 验证通过 |
+| **obs 噪声退火** | noise_level 线性退火 1.0→0.05（8000 iters，从 learn() 入口起算以适配 resume），Train/noise_level_factor 入曲线 | 同上 |
+| 续训起点 | v3c model_20000（OSS 跨账号挂载；v4 ckpt 在已耗尽账号不可达） | TASK_20260901_144→20260902_007（40100→34500 iters） |
+
+**v6 训练终值**（model_34500，配额截断）：reward 123.5、ep_len 2351、tracking 0.96、contact_number 1.18、collision≈0。DR 适配极快（~900 iters 恢复 109 → 终值 123.5 > v3c 116.7）。
+
+**v6 sim2sim（TASK_20260903_016/017，real-ω）**：三 trial 仍于 **1.55s 崩塌**（base_height<0.40，pitch 自 0.5s 单调前漂）。→ **摩擦物理失配被证伪为唯一根因**（mujoco μ=1.0 已在训练分布内仍崩）。
+
+### 8.2 ω 观测通道 5 轮证伪链（24s stand trial，model_34500）
+
+| 轮 | 变体 | 存活 | 结论 |
+|---|---|---|---|
+| 1（039） | base / stiff(solref 0.002) / soft(0.012) / no_euler / no_angvel / settle2s | 1.52 / 1.64 / 1.80 / 1.20 / **24.00** / 1.30 s | **ω=0 全稳**；接触刚度、euler、落地瞬态排除 |
+| 2（043） | ω 源 A/B：gyro sensor vs rot.T@qvel[3:6] | 1.52 / 1.65 s（两源数值差<0.05） | ω 计算源无关 |
+| 3（054） | 逐轴取反 neg_x/y/z + 幅值减半 | 2.06 / **4.98** / 1.78 / 1.72 s | neg_y 4.98s 为伪信号；帧错配证伪（URDF vs mjcf 基座挂点逐位一致） |
+| 4（060） | EMA 低通 20/50/100ms | 1.60 / 1.60 / 1.66 s | 高频振铃假设证伪（滤波连步态频段一起滤掉） |
+| 5（063） | 限幅 0.3/0.5/1.0 | 1.97 / 1.66 / 1.61 s | 幅值尾部假设证伪 |
+
+**结论**：任何真实 ω 输入 → 1.5~2.0s 崩塌（跨 v4/v5/v6 策略与纯 PD 对照 2.08s 同量级）；ω=0 → 24s 全稳。训练所得 ω 响应与 mujoco 系统性不兼容。
+
+### 8.3 v6.1：ω 鲁棒性训练（per-episode ω-dropout + 噪声提升）
+
+- **实现**：`--omega_dropout_prob 0.5`（50% env 的 policy-obs ω 块置零，privileged obs 保留真值）+ `--ang_vel_noise_mult 5.0`（ang_vel 噪声通道 ×5，覆盖 mujoco 接触尖峰 ±1.5 rad/s）。修复了 CLI 覆盖在 env 构造后失效的 bug（be23011）。
+- **训练**（TASK_20260903_072，model_34500→42500）：dropout 分布下 reward 恢复至 119.5、ep_len 2304（=v6 的 97%）。
+- **sim2sim 双模式**（model_42500，TASK_20260903_125 real / 126 zero）：
+
+| 模式 | 站立段（0-2s） | 行走段 | 判定 |
+|---|---|---|---|
+| v6 real-ω | 1.55s 崩 | — | FAIL |
+| v6.1 real-ω | **稳定**（ω 训练生效） | 3.07-3.93s 崩（起步 ~1s） | FAIL |
+| v6.1 zero-ω | 稳定 | 2.97-3.49s 崩 | FAIL |
+
+### 8.4 行走起步崩塌机制（verdict 数据，125/126）
+
+行走指令（t=2s）后：双足保持触地 0.6s、**vx 反向加速 -0.10→-1.48 m/s**、L_ank_p 跟踪误差在 t=2.0 即 0.57 rad；站立段策略踝目标大幅振荡（±0.8 rad）而实际踝被地面约束（踝平衡策略），mujoco 中该策略在起步时 paddling 反推躯干。**两种 obs 模式在行走起步同点崩塌 → 残余根因在步态动力学层（踝策略/摆动相接触转移的跨引擎差异），非观测通道层。**
+
+### 8.5 本轮最终判定（严格标准，未放宽）
+
+| 维度 | v6 | v6.1 | 阈值 | 判定 |
+|---|---|---|---|---|
+| T1 mean_reward | 123.5 | 116.1（max 125.5） | ≥200 | FAIL |
+| T2 ep_len | 2351 | 2263 | ≥2100 | **PASS** |
+| T3 tracking_lin_vel | 0.96 | 0.865（max 1.16） | ≥1.20 | FAIL |
+| T4 ref_joint_pos | 1.11 | 1.168（max 1.31） | ≥1.40 | FAIL |
+| T5 collision | ≈0 | ≈0 | ≥-0.005 | **PASS** |
+| T6 末端稳定 | — | 0.925×max | ≥0.9×max | **PASS** |
+| B: S1-S6（mujoco） | 全 FAIL | 全 FAIL | — | FAIL |
+
+**总判定：训练 T 3/6（T2/T5/T6 过），sim2sim S FAIL（站立段已修复，行走起步段未解）。**
+
+### 8.6 交付物与残留差距的工程结论
+
+- 已证伪（本轮新增）：摩擦物理失配为唯一根因、ω 观测的符号/幅值/带宽/限幅/源/帧错配、接触刚度、落地瞬态。
+- 已修复：跨账号 checkpoint 挂载续训管线、物理摩擦 DR、噪声退火、ω-dropout 训练（站立段 real-ω 崩塌 1.5s→>2s 稳定）。
+- **残留**：行走起步（t≈2s 后 ~1s 内）在 mujoco 崩塌，两 obs 模式同点——指向踝平衡策略与摆动相接触动力学的跨引擎行为差异（PhysX TGS 隐式平滑 vs mujoco Euler + mesh-hull 足底）。
+- 建议后续（超出本轮预算/号池）：① mujoco-in-the-loop 训练或多求解器混合 DR（需 GPU mujoco 环境）；② 步态层面 bootstrapping（参考步态跟踪强化）降低对踝策略的依赖；③ mujoco 侧 solver 参数系统标定（isaaclab ↔ mujoco 接触参数等效映射）。
