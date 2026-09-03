@@ -240,6 +240,14 @@ class CfgSafety:
 class CfgNoise:
     add_noise = True
     noise_level = 1.5
+    # v6.1 omega-robustness: mujoco gyro content at 100 Hz sits outside the
+    # PhysX-smooth tail (diag A/B: real-omega collapses 1.5s, zero-omega
+    # stands 24s but falls 1s into walking). Raise the ang-velocity noise so
+    # the noisy channel covers mujoco's contact-driven omega spikes, and
+    # add per-episode omega-dropout so the policy ALSO learns omega-free
+    # operation (both deployment modes must work).
+    omega_dropout_prob = 0.0        # fraction of envs with zeroed omega obs per episode
+    ang_vel_noise_multiplier = 1.0  # extra multiplier on noise_scales.ang_vel
 
     class noise_scales:
         dof_pos = 0.02

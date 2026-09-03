@@ -33,6 +33,10 @@ parser.add_argument("--noise_anneal_floor", type=float, default=-1.0,
                     help="obs-noise anneal floor (default 0.05)")
 parser.add_argument("--no_contact_dr", action="store_true", default=False,
                     help="disable physical contact friction/restitution randomization")
+parser.add_argument("--omega_dropout_prob", type=float, default=-1.0,
+                    help="per-episode omega obs dropout prob (v6.1 cross-engine robustness)")
+parser.add_argument("--ang_vel_noise_mult", type=float, default=-1.0,
+                    help="extra multiplier on ang_vel obs noise (v6.1)")
 args_cli, unknown = parser.parse_known_args()
 
 # make the repo root (e.g. /workspace/isaaclab/X1_train) importable when the
@@ -151,6 +155,10 @@ def main(args):
     if args.no_contact_dr:
         env_cfg.domain_rand.randomize_contact_friction = False
         print("[train_lab] physical contact-material DR DISABLED by flag")
+    if args.omega_dropout_prob >= 0:
+        env_cfg.noise.omega_dropout_prob = args.omega_dropout_prob
+    if args.ang_vel_noise_mult >= 0:
+        env_cfg.noise.ang_vel_noise_multiplier = args.ang_vel_noise_mult
 
     all_cfg = {"runner_class_name": train_cfg.runner_class_name}
     all_cfg.update(class_to_dict(train_cfg))

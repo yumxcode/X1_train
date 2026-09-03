@@ -233,6 +233,26 @@ class X1DHStandEnv(DirectRLEnv):
         self.noise_scale_vec = self._get_noise_scale_vec(cfg)
         # obs-noise annealing factor (set per-iteration by the runner; 1.0 = off)
         self.noise_level_factor = 1.0
+        # omega robustness (v6.1): per-episode omega obs dropout
+        p_drop = float(getattr(cfg.noise, "omega_dropout_prob", 0.0) or 0.0)
+        self._omega_keep_mask = (
+            (torch.rand(self.num_envs, device=self.device) >= p_drop)
+            .float()
+            .unsqueeze(1)
+        )
+        self._ang_vel_noise_mult = float(
+            getattr(cfg.noise, "ang_vel_noise_multiplier", 1.0) or 1.0
+        )
+        if p_drop > 0 or self._ang_vel_noise_mult != 1.0:
+            print(
+                f"[X1DHStandEnv] omega robustness ON: dropout_p={p_drop}, "
+                f"ang_vel noise x{self._ang_vel_noise_mult}"
+            )
+        self._omega_dropout_active = p_drop > 0
+        # scale the ang-velocity noise channel (training-side robustness)
+        if self._ang_vel_noise_mult != 1.0:
+            nc, na = cfg.env.num_commands, self.num_actions
+            self.noise_scale_vec[nc + 3 * na: nc + 3 * na + 3] *= self._ang_vel_noise_mult
 
         # physical contact-material DR state (v6 cross-engine randomization)
         self._material_buf = None
@@ -498,6 +518,13 @@ class X1DHStandEnv(DirectRLEnv):
         else:
             obs_now = obs_buf.clone()
 
+        # omega dropout (v6.1): zero the policy-obs angular-velocity block for
+        # the dropped envs (post-noise, so dropped == exact zeros). Privileged
+        # obs keep ground truth (critic-only). omega block: [nc+3*na : nc+3*na+3]
+        if self._omega_dropout_active:
+            nc, na = cfg.env.num_commands, self.num_actions
+            obs_now[:, nc + 3 * na: nc + 3 * na + 3] *= self._omega_keep_mask
+
         self.obs_history.append(obs_now)
         self.critic_history.append(privileged_obs_buf)
 
@@ -559,6 +586,12 @@ class X1DHStandEnv(DirectRLEnv):
         self.randomize_dof_props(env_ids)
         self.randomize_lag_props(env_ids)
         self._randomize_contact_materials(env_ids)
+        # re-sample omega dropout mask per episode (v6.1)
+        if self._omega_dropout_active:
+            p = float(self.cfg.noise.omega_dropout_prob)
+            self._omega_keep_mask[env_ids] = (
+                torch.rand(len(env_ids), device=self.device) >= p
+            ).float().unsqueeze(1)
 
         # dof state: default + small noise, zero velocity
         dof_pos = self.default_dof_pos.expand(len(env_ids), -1) + torch_rand_float(
