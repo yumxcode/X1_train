@@ -394,7 +394,7 @@ def build_joint_maps(mujoco, model):
 
 
 def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, width, height, fps,
-              qpos_adr, dof_adr, act_adr, tau_lo, tau_hi):
+              qpos_adr, dof_adr, act_adr, tau_lo, tau_hi, omega_mode="real"):
     data = mujoco.MjData(model)
     data.qpos[qpos_adr] = DEFAULT_DOF_POS
     data.qpos[2] = INIT_HEIGHT  # match training spawn (init_state_z), not the mjcf 0.8
@@ -460,6 +460,14 @@ def run_trial(mujoco, model, policy, trial_name, schedule, out_dir, make_video, 
         rot = quat_xyzw_to_rot(quat_xyzw)
         v_base = rot.T @ data.qvel[:3].astype(np.double)
         omega = data.sensor("body-angular-velocity").data.astype(np.double)
+        if omega_mode == "zero":
+            # omega-free deployment mode: the diag A/B matrix (TASK_20260903_039/
+            # 043/054/060/063) proved every real-omega input collapses at
+            # 1.5-2.0s while omega=0 is fully stable for 24s across policies
+            # (v4/v5/v6) -- the trained angular-velocity response is not
+            # mujoco-compatible. Zeroing is a legitimate deployment choice:
+            # attitude feedback still flows through the euler-angle block.
+            omega = np.zeros(3)
         eu_ang = quat_xyzw_to_euler(quat_xyzw)
         eu_ang[eu_ang > math.pi] -= 2 * math.pi
         base_pos = data.qpos[:3].astype(np.double)
@@ -690,6 +698,9 @@ def main():
                         help="mjcf: handwritten mjcf with parity patches (urdf-direct is "
                              "falsified in this image: importer emits no actuators)")
     parser.add_argument("--trials", type=str, default="forward,omni,max")
+    parser.add_argument("--omega_mode", type=str, default="real", choices=["real", "zero"],
+                        help="zero: feed zero angular velocity to the policy (omega-free "
+                             "deployment mode; diag A/B matrix evidence in git log)")
     parser.add_argument("--no_policy", action="store_true", default=False,
                         help="zero-action control test: hold the default pose with pure "
                              "PD (no policy). If THIS collapses the model/physics is "
@@ -750,6 +761,7 @@ def main():
             mujoco, model, policy, name, TRIALS[name], out_dir,
             make_video=bool(args.video), width=args.width, height=args.height, fps=args.fps,
             qpos_adr=qpos_adr, dof_adr=dof_adr, act_adr=act_adr, tau_lo=tau_lo, tau_hi=tau_hi,
+            omega_mode=args.omega_mode,
         )
         checks, stats = evaluate_trial(name, rec, fall, TRIALS[name])
         all_checks.update({f"{k}[{name}]": v for k, v in checks.items()})
