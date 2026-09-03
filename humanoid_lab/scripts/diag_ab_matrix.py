@@ -64,7 +64,7 @@ FRAME_STACK = 66
 
 
 def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
-                zero_angvel=False, settle_s=0.0):
+                zero_angvel=False, settle_s=0.0, omega_from_qvel=False):
     qpos_adr, dof_adr, act_adr, tau_lo, tau_hi = build_joint_maps(mujoco, model)
     data = mujoco.MjData(model)
     data.qpos[qpos_adr] = DEFAULT_DOF_POS
@@ -103,6 +103,9 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
         rot = quat_xyzw_to_rot(quat_xyzw)
         v_base = rot.T @ data.qvel[:3].astype(np.double)
         omega = data.sensor("body-angular-velocity").data.astype(np.double)
+        omega_qvel = rot.T @ data.qvel[3:6].astype(np.double)
+        if omega_from_qvel:
+            omega = omega_qvel
         eu = quat_xyzw_to_euler(quat_xyzw)
         eu[eu > math.pi] -= 2 * math.pi
         base_pos = data.qpos[:3].astype(np.double)
@@ -152,6 +155,10 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
         if step % 10 == 0:
             rec["t"].append(t); rec["z"].append(base_pos[2])
             rec["pitch"].append(eu[1]); rec["roll"].append(eu[0])
+            if step % 100 == 0 and t < 1.6:
+                d_om = omega_qvel - omega
+                print(f"[diag][{name:10s}] t={t:4.2f} gyro={np.array2string(omega, precision=3)} "
+                      f"qvel={np.array2string(omega_qvel, precision=3)} diff={np.array2string(d_om, precision=3)}")
         if fall_t is not None:
             break
 
@@ -185,11 +192,8 @@ def main():
 
     variants = []
     variants.append(("base", dict()))
-    variants.append(("stiff", dict(solref=(0.002, 1.0))))
-    variants.append(("soft", dict(solref=(0.012, 1.0))))
-    variants.append(("no_euler", dict(zero_euler=True)))
+    variants.append(("omega_qvel", dict(omega_from_qvel=True)))
     variants.append(("no_angvel", dict(zero_angvel=True)))
-    variants.append(("settle2s", dict(settle_s=2.0)))
 
     results = {}
     for name, kw in variants:
