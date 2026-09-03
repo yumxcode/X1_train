@@ -36,6 +36,7 @@ import torch  # noqa: E402
 
 from humanoid_lab.scripts.export_policy_lab import find_checkpoint, load_exported_policy  # noqa: E402
 from humanoid_lab.scripts.sim2sim_eval import (  # noqa: E402
+    _ensure_mujoco,
     ACTION_SCALE,
     CLIP_ACTION,
     CLIP_OBS,
@@ -171,7 +172,7 @@ def main():
     except Exception:
         pass
     os.environ.setdefault("MUJOCO_GL", args.gl)
-    import mujoco  # noqa: E402
+    mujoco = _ensure_mujoco(args.gl)
 
     ckpt = find_checkpoint(args.checkpoint)
     print(f"[diag] checkpoint: {ckpt}")
