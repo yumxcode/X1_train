@@ -272,3 +272,13 @@ IsaacLab 干净回放（walk trial，无渲染）v6.1 model_42500：24s 内 vx�
 - **结论不变**：全链最佳可部署策略仍为 **v6（model_34500）**。v6.1/v7 证明 ω 鲁棒性训练系统性摧毁行走能力；T1/T3/T4 与 S1 的达标需要范式级变更（见 §10.5 建议）而非继续在 dropout/噪声参数上迭代。
 - v7 训练曲线已归档 `logs_analysis/v7_*.json`（5 个 key，11823 点）。
 - **资源封盘（2026-09-05 凌晨）**：全部 gradmotion 账号（35–44 共 10 个）余额耗尽、号池为空且持续无补给。遗留一个未竟的廉价诊断：**v6（model_34500）的 IsaacLab walk 回放**（区分「跨引擎步态级差异」vs「训练本身未产出真实行走、T3=0.96 为 DR 掩蔽的指标假象」）——任务 TASK_20260904_162 已建好 payload（`.cache/v6/create-v6-walkreplay.json`）但因余额无法启动，留待号池补给后第一步执行（预计 10 分钟）。
+
+## 11. v8 范式实现（代码就绪，待号池开训，commit 88e38ad）
+
+§10.5 建议的范式级变更已落码（第三轮审核项「未实施」的可执行部分）：
+
+1. **结构化 ω 破坏替代 channel dropout**：per-env 增益 U(0.7,1.3) + 偏置 U(-0.3,0.3)，每 episode 重采样，**ω 通道永不置零**——v6.1/v7 证明任何 dropout 概率（0.5/0.2）都让策略钉足避险；增益/偏置为单射变换，保住平衡信息 → 行走可学，同时覆盖跨引擎 ω 漂移。
+2. **参考步态 bootstrap**：复用既有 `use_ref_actions` 基建改为权重混合（`actions += w·ref_action`），w 由 runner 从 1.0 线性退火至 0（`ref_bootstrap_iters`）——训练早期强制真实迈步，阻断站立局部最优成型路径。
+3. 保留 v6 已验证组件：物理摩擦 DR（μ_eff U(0.35,1.25)）+ 噪声退火。
+
+CLI：`--omega_gain_range/--omega_bias_range/--ref_bootstrap_iters`；本地验证（py_compile + 退火/单射/adapter 透传单测）全过。开训 payload 已备：`.cache/v6/create-v8.json`（v6 model_34500 续训 12k iters，A10 单卡 ~8.3h）——号池补给后 `gm task create --file .cache/v6/create-v8.json && gm task run` 即启动，随后按既有管线：walk 门控 → 双模式 sim2sim → T/S 判定。
