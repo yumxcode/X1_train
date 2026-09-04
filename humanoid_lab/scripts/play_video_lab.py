@@ -133,12 +133,17 @@ def main(args):
     cfg.commands.curriculum = False
     cfg.commands.gait = ["walk_omnidirectional"] * 3
     # ---- follow camera (IsaacLab tutorial convention: behind & above) ----
+    from isaaclab.sim.spawners.sensors.sensors_cfg import PinholeCameraCfg
+
     cfg.scene.tiled_camera = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot",
         offset=TiledCameraCfg.OffsetCfg(
             pos=(3.0, 0.0, 1.2), rot=(0.5, 0.5, 0.5, -0.5), convention="ros",
         ),
         data_types=["rgb"],
+        # configclass validation requires an explicit spawn; a pinhole camera
+        # prim is created parented to the Robot prim -> follows the robot
+        spawn=PinholeCameraCfg(focal_length=24.0, clipping_range=(0.1, 20.0)),
         width=848, height=480, update_period=0.05,
     )
 
