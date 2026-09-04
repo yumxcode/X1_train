@@ -215,3 +215,52 @@ v6.1 model_42500 双模式评测（TASK_20260903_125/126）的 EGL 离屏渲染 
 **阻塞根因**：镜像内 NVIDIA driver 535.5 落在 Omniverse RTX 不支持区间 `[0.0, 535.129)`（日志 `rtx driver verification failed`），`enable_cameras=True` 路径的渲染器初始化在该驱动上挂起（无崩溃、无输出，30 分钟无进展）。与相机配置（attach/固定机位）无关——属镜像/驱动层环境缺陷，非代码可修。IsaacLab 侧干净回放的**数值**证据（24s 稳定、逐关节轨迹）已由 `diag_isaaclab_play.py`（任务 016 等）以无渲染方式交付；视频层以 mujoco EGL mp4 交付（§9.1）。
 
 > 若需 IsaacLab 渲染视频：需平台侧升级 A10 镜像驱动 ≥535.161.07，或改用 4090D 资源（ESKU000001）复跑 `play_video_lab.py --trial both`。
+
+## 10. 审核第二轮：solver 矩阵证伪 + v7 训练 + IsaacLab play 视频交付（2026-09-04）
+
+### 10.1 mujoco solver 选项矩阵（TASK_20260904_039，行走 trial）
+
+针对行走起步崩塌的最后一类 mujoco 侧假设（求解器数值稳定性）：
+
+| 变体 | 存活 | 崩塌形态 |
+|---|---|---|
+| base Euler (1ms) | 3.00s | x=-0.49m, vx_end=-1.30 |
+| implicitfast 积分器 | 3.00s | 同上（数值不变） |
+| condim6 | 3.05s | 同上 |
+| implicitfast+condim6 | 3.06s | 同上 |
+| 半步长 0.5ms Euler | 4.39s | 延迟但同形态 |
+
+**证伪求解器假设**：所有选项下崩塌形态一致（**倒退** x<0、vx→-1.3），这是策略行为而非数值失稳。
+
+### 10.2 决定性发现：v6.1 策略在训练引擎中也不行走（TASK_20260904_040）
+
+IsaacLab 干净回放（walk trial，无渲染）v6.1 model_42500：24s 内 vx≈0（cmd=+0.62 窗口 mean_vx=-0.44）、双脚持续触地（拖步）、中途 1.09s 曾终止。**结合 10.1：行走崩塌的近因是策略本身——50% ω-dropout 训练把策略退化为站立型**（stand_still scale 2.5 在双模式噪声下最划算），跨引擎差异反而不是主因。
+
+### 10.3 v7 恢复轮（TASK_20260904_041：dropout 0.2 + angvel×3 + 退火 6000）
+
+12k iters 至 54499，reward 峰值 **138.9（历史新高）**，但：
+
+- T 判定（last-100）：T1 122.5 FAIL ｜ T2 2291 **PASS** ｜ T3 0.879 FAIL ｜ T4 1.157 FAIL ｜ T5 **PASS** ｜ T6 0.882 FAIL（末端回落）
+- 干净回放（TASK_20260904_143/149）：**v7 更差**——stand 0.8s 即终止，walk 门控 vx≈0
+
+**结论：ω 鲁棒性家族（v6.1/v7）系统性破坏行走能力；v6（model_34500）仍为最佳可部署策略**（real-ω 崩塌仅剩站立段问题，行走段曾在 IsaacLab 内健康）。
+
+### 10.4 IsaacLab play 视频交付（4090D，TASK_20260904_149/153）
+
+- 4090D 节点（ESKU000001，无个人存储挂载）相机管线**完全正常**——A10 挂起确认为主机驱动层缺陷。
+- 已归档 `videos/`：`isaaclab_v61_play_{stand,walk}.mp4`（v6.1 model_42500，stand 24s 稳定 z=0.615）、`isaaclab_v7_{stand,walk}.mp4`（v7 model_54499，秒塌）。每段 817 帧（imageio 编码，moov 时间戳部分异常但帧完整）。
+- 修复链沉淀：`spawn=None` attach 语义、`enable_cameras=True`、scene 成员测试需直接访问（无 `__contains__`）、视频先写扫描范围外再拷入（SDK 会即时抓取半写文件）。
+
+### 10.5 本审核轮最终判定
+
+| 维度 | v6 | v6.1 | v7 | 阈值 |
+|---|---|---|---|---|
+| T1 mean_reward | 123.5 | 116.1 | 122.5（峰值 138.9） | ≥200 FAIL |
+| T2 ep_len | 2351 | 2263 | 2291 | **PASS** |
+| T3 tracking | 0.96 | 0.865 | 0.879 | ≥1.20 FAIL |
+| T4 ref_joint | 1.11 | 1.168 | 1.157 | ≥1.40 FAIL |
+| T5 collision | ≈0 | ≈0 | ≈0 | **PASS** |
+| T6 末端稳定 | PASS | PASS | 0.882 | FAIL（仅 v7） |
+| S1-S6 mujoco | FAIL | FAIL | 未评 | FAIL |
+
+**总判定维持：T 3/6、S FAIL。结构性阻塞 = ω 鲁棒性与行走能力的训练张力**：dropout/噪声让策略放弃行走换取站立鲁棒。下一轮需换范式（mujoco-in-the-loop DR / 行走命令课程 + 步态 bootstrapping / obs 级跨引擎随机化而非 channel dropout），单纯调 dropout/噪声参数已被本轮证伪。
