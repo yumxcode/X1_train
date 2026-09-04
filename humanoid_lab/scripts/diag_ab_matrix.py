@@ -65,7 +65,7 @@ FRAME_STACK = 66
 
 def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
                 zero_angvel=False, settle_s=0.0, omega_from_qvel=False,
-                omega_tf=None, omega_ema_s=0.0):
+                omega_tf=None, omega_ema_s=0.0, schedule=None):
     qpos_adr, dof_adr, act_adr, tau_lo, tau_hi = build_joint_maps(mujoco, model)
     data = mujoco.MjData(model)
     data.qpos[qpos_adr] = DEFAULT_DOF_POS
@@ -94,6 +94,7 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
     omega_filt = np.zeros(3)
     ema_alpha = None  # per-step EMA coefficient, set by variant
     rec = {"t": [], "z": [], "pitch": [], "roll": []}
+    rec["vx"] = []; rec["x"] = []
     fall_t, fall_reason = None, None
     total = int(dur_s / SIM_DT)
     cnt = 0
@@ -136,13 +137,24 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
         elif base_pos[2] < 0.40:
             fall_t, fall_reason = t, "z<0.40"
 
+        # scheduled command (None = stand for the whole trial)
+        cmd = (0.0, 0.0, 0.0)
+        if schedule is not None:
+            cmd = next((c for (t0, t1, c) in schedule if t0 <= t < t1), (0.0, 0.0, 0.0))
+        vx_cmd, vy_cmd, wz_cmd = cmd
+
         if cnt % DECIMATION == 0:
             if SW_SWITCH:
-                cnt = 0  # stand command for the whole trial
+                vel_norm = math.sqrt(vx_cmd**2 + vy_cmd**2 + wz_cmd**2)
+                if vel_norm <= STAND_COM_THRESHOLD:
+                    cnt = 0
             obs = np.zeros([1, NUM_SINGLE_OBS])
             ph = cnt * SIM_DT
             obs[0, 0] = math.sin(2 * math.pi * ph / CYCLE_TIME)
             obs[0, 1] = math.cos(2 * math.pi * ph / CYCLE_TIME)
+            obs[0, 2] = vx_cmd * 2.0  # OBS_SCALE_LIN_VEL
+            obs[0, 3] = vy_cmd * 2.0
+            obs[0, 4] = wz_cmd * 1.0  # OBS_SCALE_ANG_VEL
             obs[0, NUM_COMMANDS:NUM_COMMANDS + NUM_ACTIONS] = (q - DEFAULT_DOF_POS) * OBS_SCALE_DOF_POS
             obs[0, NUM_COMMANDS + NUM_ACTIONS:NUM_COMMANDS + 2 * NUM_ACTIONS] = dq * OBS_SCALE_DOF_VEL
             obs[0, NUM_COMMANDS + 2 * NUM_ACTIONS:NUM_COMMANDS + 3 * NUM_ACTIONS] = action
@@ -172,6 +184,7 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
         if step % 10 == 0:
             rec["t"].append(t); rec["z"].append(base_pos[2])
             rec["pitch"].append(eu[1]); rec["roll"].append(eu[0])
+            rec["vx"].append(float(v_base[0])); rec["x"].append(float(base_pos[0]))
             if step % 100 == 0 and t < 1.6:
                 d_om = omega_qvel - omega
                 print(f"[diag][{name:10s}] t={t:4.2f} gyro={np.array2string(omega, precision=3)} "
@@ -182,7 +195,8 @@ def run_variant(mujoco, model, policy, name, dur_s=24.0, zero_euler=False,
     i_last = len(rec["t"]) - 1
     print(f"[diag][{name:10s}] survive={fall_t if fall_t else dur_s:6.2f}s "
           f"reason={fall_reason or '-':12s} final_z={rec['z'][i_last]:.3f} "
-          f"pitch={rec['pitch'][i_last]:+.3f} roll={rec['roll'][i_last]:+.3f}")
+          f"pitch={rec['pitch'][i_last]:+.3f} roll={rec['roll'][i_last]:+.3f} "
+          f"x={rec['x'][i_last]:+.2f}m vx_end={rec['vx'][i_last]:+.2f}")
     return fall_t or dur_s, fall_reason
 
 
@@ -197,6 +211,8 @@ def main():
         pass
     os.environ.setdefault("MUJOCO_GL", args.gl)
     mujoco = _ensure_mujoco(args.gl)
+    global INT_IMPLICITFAST
+    INT_IMPLICITFAST = int(mujoco.mjtIntegrator.mjINT_IMPLICITFAST)
 
     ckpt = find_checkpoint(args.checkpoint)
     print(f"[diag] checkpoint: {ckpt}")
@@ -208,36 +224,54 @@ def main():
     model.opt.timestep = SIM_DT
 
     variants = []
-    variants.append(("base", dict()))
-    # Amplitude-tail hypothesis: landing-impact omega spikes (|w|~1.5 rad/s)
-    # are tail-of-distribution vs training (gait |w|<0.5). Clamp keeps the
-    # small-signal gait feedback intact and only truncates the spikes --
-    # unlike half (destroys calibration) and EMA (filters gait band too).
-    variants.append(("clamp030", dict(omega_tf=lambda w: np.clip(w, -0.30, 0.30))))
-    variants.append(("clamp050", dict(omega_tf=lambda w: np.clip(w, -0.50, 0.50))))
-    variants.append(("clamp100", dict(omega_tf=lambda w: np.clip(w, -1.00, 1.00))))
-    variants.append(("no_angvel", dict(zero_angvel=True)))
+    # ---- solver-matrix mode: WALK trial + mujoco solver options ----------
+    # The walk-onset collapse (t~2s+1s, both obs modes) is a gait-dynamics
+    # divergence. PhysX TGS integrates implicitly; mujoco default Euler is
+    # explicit and known to be less stable for contact-rich pendulum systems.
+    # implicitfast + condim6 (rolling/torsional friction) are the standard
+    # mujoco-side stability upgrades.
+    walk_schedule = [(0.0, 2.0, (0.0, 0.0, 0.0)),
+                     (2.0, 20.0, (1.0, 0.0, 0.0)),
+                     (20.0, 24.0, (0.0, 0.0, 0.0))]
+
+    def _with_opts(**opts):
+        def applier(m):
+            for k, v in opts.items():
+                setattr(m.opt, k, v)
+            return m
+        return applier
+
+    def _condim6(m):
+        n = 0
+        for g in range(m.ngeom):
+            if m.geom_contype[g] != 0 or m.geom_conaffinity[g] != 0:
+                m.geom_condim[g] = 6
+                n += 1
+        print(f"[diag] condim6 on {n} collision geoms")
+        return m
+
+    def make(mujoco_, opt_fns):
+        m = build_model_mjcf_patched(mujoco_)
+        m.opt.timestep = SIM_DT
+        for fn in opt_fns:
+            m = fn(m)
+        return m
+
+    variants.append(("base_euler", dict(model_fns=[])))
+    variants.append(("implicitfast", dict(
+        model_fns=[lambda m: (setattr(m.opt, "integrator", INT_IMPLICITFAST), m)[1]])))
+    variants.append(("condim6", dict(model_fns=[_condim6])))
+    variants.append(("ifast_cd6", dict(
+        model_fns=[_condim6, lambda m: (setattr(m.opt, "integrator", INT_IMPLICITFAST), m)[1]])))
+    variants.append(("ts5e4_euler", dict(
+        model_fns=[lambda m: (setattr(m.opt, "timestep", 0.0005), m)[1]])))
+    for v in variants:
+        v[1]["schedule"] = walk_schedule
 
     results = {}
     for name, kw in variants:
-        if "solref" in kw:
-            sr = kw.pop("solref")
-            m2 = build_model_mjcf_patched(mujoco)
-            m2.opt.timestep = SIM_DT
-            n = 0
-            for g in range(m2.ngeom):
-                if m2.geom_type[g] == 0:  # mjGEOM_PLANE
-                    m2.geom_solref[g] = [sr[0], sr[1]]
-                    n += 1
-            # robot collision geoms: contact pair with floor = any geom with contype
-            for g in range(m2.ngeom):
-                if m2.geom_contype[g] != 0 and m2.geom_type[g] != 0:
-                    m2.geom_solref[g] = [sr[0], sr[1]]
-                    n += 1
-            print(f"[diag] {name}: solref={sr} applied to {n} geoms")
-            results[name] = run_variant(mujoco, m2, policy, name, **kw)
-        else:
-            results[name] = run_variant(mujoco, model, policy, name, **kw)
+        m = make(mujoco, kw.pop("model_fns"))
+        results[name] = run_variant(mujoco, m, policy, name, **kw)
 
     out = os.path.join(_REPO_ROOT, "logs", "x1_dh_stand", "gm_play")
     os.makedirs(out, exist_ok=True)
