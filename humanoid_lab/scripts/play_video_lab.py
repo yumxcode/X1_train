@@ -132,18 +132,21 @@ def main(args):
     dr.add_imu_lag = False
     cfg.commands.curriculum = False
     cfg.commands.gait = ["walk_omnidirectional"] * 3
-    # ---- follow camera: ATTACH to the existing Robot prim.                 #
-    # spawn=MISSING (omitted) fails DirectRLEnvCfg.validate() ('Missing      #
-    # values ... spawn'); spawn=<Cfg> tries to CREATE a prim at prim_path    #
-    # ('prim already exists'); spawn=None is the documented attach-mode: no  #
-    # prim creation, sensor parents to the existing prim.                    #
+    # ---- FIXED world camera at spawn (follow-cam attach mode hung the      #
+    # RTX renderer init on this A10 image, 3 attempts: 005/016/020). A      #
+    # camera on a FRESH prim under /World/Camera is spawned fresh (no       #
+    # collision with the robot articulation). The walk trial starts at      #
+    # origin and walks forward ~x, so a static camera at (3.5, 2.5, 1.2)    #
+    # frames most of it.                                                    #
+    from isaaclab.sim.spawners.sensors.sensors_cfg import PinholeCameraCfg
+
     cfg.scene.tiled_camera = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot",
+        prim_path="/World/Camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(3.0, 0.0, 1.2), rot=(0.5, 0.5, 0.5, -0.5), convention="ros",
+            pos=(3.5, 2.5, 1.2), rot=(0.36, 0.36, 0.609, -0.609), convention="ros",
         ),
         data_types=["rgb"],
-        spawn=None,
+        spawn=PinholeCameraCfg(focal_length=18.0, clipping_range=(0.1, 50.0)),
         width=848, height=480, update_period=0.05,
     )
 
