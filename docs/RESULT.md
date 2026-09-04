@@ -248,7 +248,7 @@ IsaacLab 干净回放（walk trial，无渲染）v6.1 model_42500：24s 内 vx�
 ### 10.4 IsaacLab play 视频交付（4090D，TASK_20260904_149/153）
 
 - 4090D 节点（ESKU000001，无个人存储挂载）相机管线**完全正常**——A10 挂起确认为主机驱动层缺陷。
-- 已归档 `videos/`：`isaaclab_v61_play_{stand,walk}.mp4`（v6.1 model_42500，stand 24s 稳定 z=0.615）、`isaaclab_v7_{stand,walk}.mp4`（v7 model_54499，秒塌）。每段 817 帧（imageio 编码，moov 时间戳部分异常但帧完整）。
+- 已归档 `videos/`：`isaaclab_v61_play_{stand,walk}.mp4`（v6.1 model_42500，stand 录到 480 帧 ≈16 s 的稳定站立段 z≈0.61；walk 121 帧）、`isaaclab_v7_{stand,walk}.mp4`（v7 model_54499，仅 17/21 帧——回放秒塌，帧数本身即为退化证据）。注：imageio 回退编码器写出的 mvhd 时间戳与帧数不一致（元数据噪声），帧数（stsz 采样表）为可靠口径。
 - 修复链沉淀：`spawn=None` attach 语义、`enable_cameras=True`、scene 成员测试需直接访问（无 `__contains__`）、视频先写扫描范围外再拷入（SDK 会即时抓取半写文件）。
 
 ### 10.5 本审核轮最终判定
@@ -264,3 +264,10 @@ IsaacLab 干净回放（walk trial，无渲染）v6.1 model_42500：24s 内 vx�
 | S1-S6 mujoco | FAIL | FAIL | 未评 | FAIL |
 
 **总判定维持：T 3/6、S FAIL。结构性阻塞 = ω 鲁棒性与行走能力的训练张力**：dropout/噪声让策略放弃行走换取站立鲁棒。下一轮需换范式（mujoco-in-the-loop DR / 行走命令课程 + 步态 bootstrapping / obs 级跨引擎随机化而非 channel dropout），单纯调 dropout/噪声参数已被本轮证伪。
+
+### 10.6 第三轮补全：v7 mujoco 评测 + 峰值 checkpoint 门控（2026-09-04 深夜）
+
+- **v7-tail（model_54499）mujoco sim2sim（TASK_20260904_156）**：三 trial 崩塌于 3.10-3.21s，**S1-S6 全 FAIL**——与 v4/v5/v6/v6.1 同点同形态。v7 家族确认同样的 mujoco 崩塌，补齐了 §10.5 表中「未评」项。
+- **v7-peak（model_47800，reward 峰值 138.86@47801）IsaacLab 行走门控（TASK_20260904_159）**：存活全部 24s（z≈0.61，优于 tail 的 0.8s 塌陷），但**完全不行走**——cmd=+1.06 窗口 mean_vx=-0.40、全程 vx 峰值仅 +0.06（纯站立）。峰值 checkpoint 无 sim2sim 价值（S2/S5 必然大幅 FAIL），v7 家族就此关闭。
+- **结论不变**：全链最佳可部署策略仍为 **v6（model_34500）**。v6.1/v7 证明 ω 鲁棒性训练系统性摧毁行走能力；T1/T3/T4 与 S1 的达标需要范式级变更（见 §10.5 建议）而非继续在 dropout/噪声参数上迭代。
+- v7 训练曲线已归档 `logs_analysis/v7_*.json`（5 个 key，11823 点）。
