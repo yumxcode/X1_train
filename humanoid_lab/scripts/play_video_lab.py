@@ -32,7 +32,7 @@ if _REPO_ROOT not in sys.path:
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
-app_launcher = AppLauncher(headless=parser_cli.headless, offscreen_render=True)
+app_launcher = AppLauncher(headless=parser_cli.headless, offscreen_render=True, enable_cameras=True)
 simulation_app = app_launcher.app
 
 import torch  # noqa: E402
