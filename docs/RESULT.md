@@ -187,3 +187,31 @@ v5（TASK_20260831_126 + 20260901_005）：22000 iters，reward 123.4、ep_len 2
 - 已修复：跨账号 checkpoint 挂载续训管线、物理摩擦 DR、噪声退火、ω-dropout 训练（站立段 real-ω 崩塌 1.5s→>2s 稳定）。
 - **残留**：行走起步（t≈2s 后 ~1s 内）在 mujoco 崩塌，两 obs 模式同点——指向踝平衡策略与摆动相接触动力学的跨引擎行为差异（PhysX TGS 隐式平滑 vs mujoco Euler + mesh-hull 足底）。
 - 建议后续（超出本轮预算/号池）：① mujoco-in-the-loop 训练或多求解器混合 DR（需 GPU mujoco 环境）；② 步态层面 bootstrapping（参考步态跟踪强化）降低对踝策略的依赖；③ mujoco 侧 solver 参数系统标定（isaaclab ↔ mujoco 接触参数等效映射）。
+
+## 9. 视频交付与 IsaacLab 相机路线封盘（2026-09-04）
+
+### 9.1 mujoco EGL sim2sim 视频（已交付）
+
+v6.1 model_42500 双模式评测（TASK_20260903_125/126）的 EGL 离屏渲染 mp4 已下载归档至本仓库 `videos/`（real-ω 模式，forward/omni/max 各一，含行走起步崩塌全过程，SDK 自动上传原始副本在任务页 `videoUrl`）：
+
+| 文件 | 大小 | 内容 |
+|---|---|---|
+| `videos/sim2sim_forward.mp4` | 706 KB | forward trial（3.26s 崩塌） |
+| `videos/sim2sim_omni.mp4` | 857 KB | omni trial（3.93s 崩塌） |
+| `videos/sim2sim_max.mp4` | 669 KB | max trial（3.07s 崩塌） |
+
+### 9.2 IsaacLab play 视频路线：5 次尝试后封盘（环境阻塞）
+
+`humanoid_lab/scripts/play_video_lab.py`（TiledCamera 干净回放，walk+stand 各 24s）在 A10 镜像（BJX00000093/V000136）上的尝试链：
+
+| # | 任务 | 配置 | 结果 |
+|---|---|---|---|
+| 1 | TASK_20260904_005 | spawn 省略 | `Missing values ... spawn`（configclass 校验） |
+| 2 | TASK_20260904_010 | spawn=PinholeCameraCfg @ Robot prim | `prim already exists` |
+| 3 | TASK_20260904_016 | spawn=None（attach 模式）+ enable_cameras | RTX 渲染器初始化挂起 |
+| 4 | TASK_20260904_020 | 同 3 复验 | 同点挂起（19s 后日志冻结） |
+| 5 | TASK_20260904_026 | 固定机位 /World/Camera 新 prim | 同点挂起 → 停任务 |
+
+**阻塞根因**：镜像内 NVIDIA driver 535.5 落在 Omniverse RTX 不支持区间 `[0.0, 535.129)`（日志 `rtx driver verification failed`），`enable_cameras=True` 路径的渲染器初始化在该驱动上挂起（无崩溃、无输出，30 分钟无进展）。与相机配置（attach/固定机位）无关——属镜像/驱动层环境缺陷，非代码可修。IsaacLab 侧干净回放的**数值**证据（24s 稳定、逐关节轨迹）已由 `diag_isaaclab_play.py`（任务 016 等）以无渲染方式交付；视频层以 mujoco EGL mp4 交付（§9.1）。
+
+> 若需 IsaacLab 渲染视频：需平台侧升级 A10 镜像驱动 ≥535.161.07，或改用 4090D 资源（ESKU000001）复跑 `play_video_lab.py --trial both`。
