@@ -155,8 +155,12 @@ def main(args):
 
     print("[play] creating clean env with tiled camera ...")
     env = X1DHStandEnv(cfg=cfg, render_mode=None)
-    if "tiled_camera" not in env.scene:
-        raise RuntimeError("tiled_camera missing from scene -- cannot record")
+    # NOTE: InteractiveScene has no __contains__; `in` falls back to iteration
+    # (__getitem__(0) -> KeyError '0'). Access directly instead.
+    try:
+        env.scene["tiled_camera"]
+    except KeyError as exc:
+        raise RuntimeError(f"tiled_camera missing from scene -- cannot record ({exc})")
 
     ckpt = find_checkpoint(args.checkpoint)
     loaded = torch.load(ckpt, map_location="cpu", weights_only=False)
