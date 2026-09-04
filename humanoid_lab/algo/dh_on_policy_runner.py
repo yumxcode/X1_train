@@ -135,6 +135,18 @@ class DHOnPolicyRunner:
                 f"{anneal_iters} iters (start {anneal_start})"
             )
 
+        # v8 gait bootstrap: ref-action blend weight 1.0 -> 0.0 over
+        # ref_bootstrap_iters (requires cfg.env.use_ref_actions on the env).
+        boot_iters = int(self.cfg.get("ref_bootstrap_iters", 0) or 0)
+        boot_start = self.current_learning_iteration
+        if boot_iters > 0:
+            if not getattr(self.env, "cfg", None) or not self.env.cfg.env.use_ref_actions:
+                print("[runner] WARNING ref_bootstrap_iters set but env use_ref_actions is OFF — ignoring")
+                boot_iters = 0
+            else:
+                self.env.ref_action_weight = 1.0
+                print(f"[runner] gait bootstrap ON: ref weight 1.0 -> 0.0 over {boot_iters} iters (start {boot_start})")
+
         for it in range(self.current_learning_iteration, tot_iter):
             self.it = it
             if anneal_iters > 0:
@@ -143,6 +155,10 @@ class DHOnPolicyRunner:
                 )
                 self.env.noise_level_factor = noise_factor
                 self._last_noise_factor = noise_factor
+            if boot_iters > 0:
+                w = max(0.0, 1.0 - (it - boot_start) / float(boot_iters))
+                self.env.ref_action_weight = w
+                self._last_boot_weight = w
             start = time.time()
 
             obs_std, obs_mean = torch.std_mean(obs, dim=0)
@@ -238,6 +254,8 @@ class DHOnPolicyRunner:
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
         if getattr(self, "_last_noise_factor", None) is not None:
             self.writer.add_scalar("Train/noise_level_factor", self._last_noise_factor, locs["it"])
+        if getattr(self, "_last_boot_weight", None) is not None:
+            self.writer.add_scalar("Train/ref_action_weight", self._last_boot_weight, locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]

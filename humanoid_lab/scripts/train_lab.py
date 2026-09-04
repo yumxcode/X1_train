@@ -34,9 +34,15 @@ parser.add_argument("--noise_anneal_floor", type=float, default=-1.0,
 parser.add_argument("--no_contact_dr", action="store_true", default=False,
                     help="disable physical contact friction/restitution randomization")
 parser.add_argument("--omega_dropout_prob", type=float, default=-1.0,
-                    help="per-episode omega obs dropout prob (v6.1 cross-engine robustness)")
+                    help="per-episode omega obs dropout prob (v6.1 cross-engine robustness; v8: kills walking — prefer gain/bias)")
 parser.add_argument("--ang_vel_noise_mult", type=float, default=-1.0,
                     help="extra multiplier on ang_vel obs noise (v6.1)")
+parser.add_argument("--omega_gain_range", type=float, nargs=2, default=None,
+                    help="per-env omega obs gain range, e.g. 0.7 1.3 (v8 structured corruption)")
+parser.add_argument("--omega_bias_range", type=float, nargs=2, default=None,
+                    help="per-env omega obs bias range, e.g. -0.3 0.3 (v8)")
+parser.add_argument("--ref_bootstrap_iters", type=int, default=-1,
+                    help="v8 gait bootstrap: ref-action blend weight 1->0 over N iters (sets use_ref_actions)")
 args_cli, unknown = parser.parse_known_args()
 
 # make the repo root (e.g. /workspace/isaaclab/X1_train) importable when the
@@ -143,6 +149,14 @@ def main(args):
         env_cfg.noise.omega_dropout_prob = args.omega_dropout_prob
     if args.ang_vel_noise_mult >= 0:
         env_cfg.noise.ang_vel_noise_multiplier = args.ang_vel_noise_mult
+    if args.omega_gain_range is not None:
+        env_cfg.noise.omega_gain_range = list(args.omega_gain_range)
+    if args.omega_bias_range is not None:
+        env_cfg.noise.omega_bias_range = list(args.omega_bias_range)
+    if args.ref_bootstrap_iters >= 0:
+        train_cfg.runner.ref_bootstrap_iters = args.ref_bootstrap_iters
+        env_cfg.env.use_ref_actions = True
+        print(f"[train_lab] gait bootstrap ON: {args.ref_bootstrap_iters} iters (use_ref_actions=True)")
 
     print(f"[train_lab] creating env with {args.num_envs} envs ...")
     env = X1DHStandEnv(cfg=env_cfg, render_mode=None)

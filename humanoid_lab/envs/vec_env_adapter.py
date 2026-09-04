@@ -50,6 +50,16 @@ class VecEnvAdapter:
     def noise_level_factor(self, value):
         self.env.noise_level_factor = value
 
+    # v8 gait bootstrap passthrough (explicit property: plain assignment on
+    # the adapter would shadow the env attribute)
+    @property
+    def ref_action_weight(self):
+        return self.env.ref_action_weight
+
+    @ref_action_weight.setter
+    def ref_action_weight(self, value):
+        self.env.ref_action_weight = value
+
     @property
     def max_episode_length(self):
         return self.env.max_episode_length

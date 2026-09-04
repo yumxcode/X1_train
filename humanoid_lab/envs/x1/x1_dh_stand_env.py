@@ -243,10 +243,22 @@ class X1DHStandEnv(DirectRLEnv):
         self._ang_vel_noise_mult = float(
             getattr(cfg.noise, "ang_vel_noise_multiplier", 1.0) or 1.0
         )
-        if p_drop > 0 or self._ang_vel_noise_mult != 1.0:
+        # v8 structured omega corruption: per-env gain + bias (channel always
+        # present — dropout destroyed walking, see cfg comment). Resampled
+        # per episode in _reset_idx.
+        self._omega_gain = torch.ones(self.num_envs, 1, device=self.device)
+        self._omega_bias = torch.zeros(self.num_envs, 1, device=self.device)
+        self._omega_corrupt_on = (
+            tuple(cfg.noise.omega_gain_range) != (1.0, 1.0)
+            or tuple(cfg.noise.omega_bias_range) != (0.0, 0.0)
+        )
+        # v8 gait bootstrap weight (set per-iteration by the runner)
+        self.ref_action_weight = float(getattr(cfg.env, "ref_action_weight", 0.0) or 0.0)
+        if p_drop > 0 or self._ang_vel_noise_mult != 1.0 or self._omega_corrupt_on:
             print(
                 f"[X1DHStandEnv] omega robustness ON: dropout_p={p_drop}, "
-                f"ang_vel noise x{self._ang_vel_noise_mult}"
+                f"ang_vel noise x{self._ang_vel_noise_mult}, "
+                f"gain={cfg.noise.omega_gain_range}, bias={cfg.noise.omega_bias_range}"
             )
         self._omega_dropout_active = p_drop > 0
         # scale the ang-velocity noise channel (training-side robustness)
@@ -343,7 +355,9 @@ class X1DHStandEnv(DirectRLEnv):
         clip = self.cfg.normalization.clip_actions
         self.actions = torch.clip(actions, -clip, clip).to(self.device)
         if self.cfg.env.use_ref_actions:
-            self.actions = self.actions + self.ref_action
+            # v8 bootstrap: partial-weight reference action blended on top of
+            # the policy action (weight annealed by the runner to 0)
+            self.actions = self.actions + self.ref_action_weight * self.ref_action
 
     def _apply_action(self):
         """Called every physics substep (1 kHz): update lag buffer, recompute PD torques."""
@@ -524,6 +538,13 @@ class X1DHStandEnv(DirectRLEnv):
         if self._omega_dropout_active:
             nc, na = cfg.env.num_commands, self.num_actions
             obs_now[:, nc + 3 * na: nc + 3 * na + 3] *= self._omega_keep_mask
+        # v8 structured corruption (no dropout): per-env gain+bias on the
+        # policy-obs omega block. Channel stays present -> balance/walking
+        # remains learnable; gain/bias error covers cross-engine shift.
+        if self._omega_corrupt_on:
+            nc, na = cfg.env.num_commands, self.num_actions
+            sl = slice(nc + 3 * na, nc + 3 * na + 3)
+            obs_now[:, sl] = obs_now[:, sl] * self._omega_gain + self._omega_bias
 
         self.obs_history.append(obs_now)
         self.critic_history.append(privileged_obs_buf)
@@ -592,6 +613,13 @@ class X1DHStandEnv(DirectRLEnv):
             self._omega_keep_mask[env_ids] = (
                 torch.rand(len(env_ids), device=self.device) >= p
             ).float().unsqueeze(1)
+        # re-sample omega corruption gain/bias per episode (v8)
+        if self._omega_corrupt_on:
+            glo, ghi = self.cfg.noise.omega_gain_range
+            blo, bhi = self.cfg.noise.omega_bias_range
+            n = len(env_ids)
+            self._omega_gain[env_ids] = torch_rand_float(glo, ghi, (n, 1), device=self.device)
+            self._omega_bias[env_ids] = torch_rand_float(blo, bhi, (n, 1), device=self.device)
 
         # dof state: default + small noise, zero velocity
         dof_pos = self.default_dof_pos.expand(len(env_ids), -1) + torch_rand_float(

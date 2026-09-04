@@ -228,7 +228,12 @@ class CfgEnv:
     episode_length_s = 24.0
     init_state_z = 0.7          # base spawn height above env origin
     use_ref_actions = False
-    num_commands = 5            # sin_pos cos_pos vx vy vz
+    # v8 gait bootstrap: weight of the reference-gait action added on top of
+    # the policy action (0 = off). Annealed by the runner from 1.0 -> 0 to
+    # prevent the degenerate standing optimum from forming while the omega
+    # channel is corrupted (RESULT.md 10.2).
+    ref_action_weight = 0.0
+    num_commands = 5            # sin_pos cos_pos vx vy wz
 
 
 class CfgSafety:
@@ -246,7 +251,15 @@ class CfgNoise:
     # the noisy channel covers mujoco's contact-driven omega spikes, and
     # add per-episode omega-dropout so the policy ALSO learns omega-free
     # operation (both deployment modes must work).
-    omega_dropout_prob = 0.0        # fraction of envs with zeroed omega obs per episode
+    # v8 LESSON (RESULT.md 10.2/10.3): channel DROPOUT (any p>=0.2) destroys
+    # walking — the policy hedges by planting both feet (degenerate stand).
+    # Paradigm: keep the omega channel ALWAYS PRESENT but structurally
+    # corrupted (per-env gain + bias, resampled per episode). Gain/bias
+    # errors mimic cross-engine trajectory shift while preserving the
+    # information needed for balance -> walking stays learnable.
+    omega_dropout_prob = 0.0        # DISABLED by default (v8: kills walking)
+    omega_gain_range = [1.0, 1.0]   # per-env omega obs gain, e.g. [0.7, 1.3]
+    omega_bias_range = [0.0, 0.0]   # per-env omega obs bias, e.g. [-0.3, 0.3]
     ang_vel_noise_multiplier = 1.0  # extra multiplier on noise_scales.ang_vel
 
     class noise_scales:
@@ -489,6 +502,9 @@ class X1DHStandCfgPPO:
         # resumed run anneals over its OWN iterations. 0 disables.
         noise_anneal_iters = 0
         noise_anneal_floor = 0.05
+        # v8 gait bootstrap (requires env.use_ref_actions=True): ref-action
+        # blend weight anneals 1.0 -> 0.0 over these iterations.
+        ref_bootstrap_iters = 0
 
 
 @configclass
