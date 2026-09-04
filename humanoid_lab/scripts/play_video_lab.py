@@ -132,14 +132,18 @@ def main(args):
     dr.add_imu_lag = False
     cfg.commands.curriculum = False
     cfg.commands.gait = ["walk_omnidirectional"] * 3
-    # ---- follow camera: ATTACH to the existing Robot prim (no spawn --    #
-    # spawning would try to create a new prim at an existing path and fail) #
+    # ---- follow camera: ATTACH to the existing Robot prim.                 #
+    # spawn=MISSING (omitted) fails DirectRLEnvCfg.validate() ('Missing      #
+    # values ... spawn'); spawn=<Cfg> tries to CREATE a prim at prim_path    #
+    # ('prim already exists'); spawn=None is the documented attach-mode: no  #
+    # prim creation, sensor parents to the existing prim.                    #
     cfg.scene.tiled_camera = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot",
         offset=TiledCameraCfg.OffsetCfg(
             pos=(3.0, 0.0, 1.2), rot=(0.5, 0.5, 0.5, -0.5), convention="ros",
         ),
         data_types=["rgb"],
+        spawn=None,
         width=848, height=480, update_period=0.05,
     )
 
