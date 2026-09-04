@@ -169,12 +169,26 @@ def main(args):
     ac = ac.eval().to(env.device)
     print(f"[play] loaded {ckpt} (iter={loaded.get('iter')})")
 
-    out_dir = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", "x1_dh_stand",
-                           "play_video", time.strftime("%Y-%m-%d_%H-%M-%S"))
-    os.makedirs(out_dir, exist_ok=True)
+    # Write videos OUTSIDE the SDK scan range first: the gradmotion SDK
+    # uploads any *.mp4 it sees under logs/<exp>/ THE MOMENT the file is
+    # detected -- grabbing half-written files (48-byte truncated uploads,
+    # TASK_20260904_049). Only after both writers are closed do we copy the
+    # finished files into the scanned directory.
+    tmp_dir = os.path.join("/tmp", "x1_play_video", time.strftime("%Y-%m-%d_%H-%M-%S"))
+    os.makedirs(tmp_dir, exist_ok=True)
     trials = ["walk", "stand"] if args.trial == "both" else [args.trial]
     for trial in trials:
-        run_trial(env, ac, trial, out_dir, args.max_steps, args.fps)
+        run_trial(env, ac, trial, tmp_dir, args.max_steps, args.fps)
+
+    out_dir = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", "x1_dh_stand",
+                           "play_video", os.path.basename(tmp_dir))
+    os.makedirs(out_dir, exist_ok=True)
+    import shutil
+
+    for trial in trials:
+        src = os.path.join(tmp_dir, f"isaaclab_play_{trial}.mp4")
+        shutil.copyfile(src, os.path.join(out_dir, f"isaaclab_play_{trial}.mp4"))
+        print(f"[play] finalized {trial} video -> {out_dir}")
     print(f"[play] all videos under {out_dir}")
 
 
