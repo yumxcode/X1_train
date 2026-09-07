@@ -282,3 +282,26 @@ IsaacLab 干净回放（walk trial，无渲染）v6.1 model_42500：24s 内 vx�
 3. 保留 v6 已验证组件：物理摩擦 DR（μ_eff U(0.35,1.25)）+ 噪声退火。
 
 CLI：`--omega_gain_range/--omega_bias_range/--ref_bootstrap_iters`；本地验证（py_compile + 退火/单射/adapter 透传单测）全过。开训 payload 已备：`.cache/v6/create-v8.json`（v6 model_34500 续训 12k iters，A10 单卡 ~8.3h）——号池补给后 `gm task create --file .cache/v6/create-v8.json && gm task run` 即启动，随后按既有管线：walk 门控 → 双模式 sim2sim → T/S 判定。
+
+## 12. v8 轮次（2026-09-07，号池补给后）
+
+### 12.1 基础设施恢复
+- 号池 3 个新账号（userId 4366/4367/4368）全验证可用；gm 通道修复（HOME 沙箱 → `.cache/gm.sh` wrapper：先取 key 再改 HOME）。
+- 探针（TASK_20260907_046/057）：克隆目录 `/workspace/isaaclab/X1_train`；trainType=2 挂载 checkpoint 落于 `/workspace/isaaclab/workspace/isaaclab/model_<iter>.pt`；镜像 BJX00000093/V000136（Py3.11/torch2.7.0+cu128/isaaclab 0.44.8）。
+- 冒烟（058）抓出 `train_lab.py` UnboundLocalError（train_cfg 声明晚于 ref_bootstrap 写入）→ 修复 c2ddc47，重冒烟（059）通过。
+
+### 12.2 v8 训练（TASK_20260907_068，进行中）
+- 配置：v3c model_20000 续训 →32000（12k iters）；ω 结构化破坏 gain U(0.7,1.3)+bias U(±0.3)；gait bootstrap 4000 iters（ref-action 混合权重 1→0，iter 24000 归零）；噪声退火 12000 iters（1.0→0.05，iter 32000 到底）；物理摩擦 DR 沿用。
+- 早期健康：bootstrap 扰动下 reward 67→75（2500 iters 内）；22860 时 tracking 0.94、reward ~120+。
+
+### 12.3 walk 门控中段结果（账号 2/3 并行，不占训练资源）
+
+| checkpoint | 存活 | 前向窗 mean_vx | 判读 |
+|---|---|---|---|
+| v8@22500（bootstrap w≈0.37，噪声 0.72×） | **24s 全程** z=0.61 | −0.54 @cmd+0.86 | 稳定但倒行 |
+| v8@27900（bootstrap 0，噪声 0.34×） | 4.11s 倒 | （窗口过短） | 退火未完成，非公平点 |
+
+### 12.4 决定性对照：v4 walk 门控（TASK_20260907_133，补历史空白）
+**v4（model_20000，历史最佳）首次 walk 门控：6.87s 倒，前向窗 mean_vx = −1.09（cmd+0.81），reset 后窗 −1.05（cmd+1.06）。**
+- 历史"v4 24s 稳定"仅为 stand trial；walk trial 从未跑过（TASK_20260904_162 因余额中断）。
+- **结论：walk 门控失败先于一切鲁棒性训练（v6.1/v7 的"站立退化"并非行走的破坏者）——训练指标 T3≈0.95 是噪声/DR 掩蔽的假象，训练管线从未产出干净条件下真实前向行走的策略。** 残余希望在 v8 的噪声退火（32000 时策略已在 0.05× 噪声下训练数千 iters）；终局门控待 model_32000。
