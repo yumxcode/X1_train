@@ -128,6 +128,7 @@ def _discover_checkpoint(hint: str) -> str:
 
 
 def main(args):
+    train_cfg = X1DHStandCfgPPO()
     env_cfg = X1DHStandEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
@@ -162,7 +163,6 @@ def main(args):
     env = X1DHStandEnv(cfg=env_cfg, render_mode=None)
     venv = VecEnvAdapter(env, env_cfg)
 
-    train_cfg = X1DHStandCfgPPO()
     if args.max_iterations > 0:
         train_cfg.runner.max_iterations = args.max_iterations
     if args.run_name:
