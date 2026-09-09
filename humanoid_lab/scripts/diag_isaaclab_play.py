@@ -103,8 +103,9 @@ def main(args):
     print(f"[diag] loaded {ckpt} (iter={loaded.get('iter')})")
 
     obs_dict, _ = env.reset()
-    log = {k: [] for k in ("t", "z", "roll", "pitch", "vx", "vy", "wz", "tau_max",
-                           "foot_l", "foot_r", "cmd_vx", "q", "action", "terminated")}
+    log = {k: [] for k in ("t", "z", "roll", "pitch", "yaw", "vx", "vy", "wz", "tau_max",
+                           "foot_l", "foot_r", "cmd_vx", "cmd_vy", "cmd_wz", "base_x", "base_y",
+                           "vx_b", "vy_b", "q", "action", "terminated")}
     fallen_at = None
 
     for step in range(args.max_steps):
@@ -115,26 +116,49 @@ def main(args):
         t = step * 0.01
         rs = env.root_states[0]
         eu = get_euler_xyz_tensor(env.base_quat)[0].cpu().numpy()
+        # body-frame linear velocity (same convention as training reward tracking_lin_vel)
+        v_b = env.quat_rotate_inverse(env.base_quat[0:1], env.root_states[0:1, 7:10])[0].cpu().numpy()
         contact = env.contact_forces[0, env.feet_indices, 2].cpu() > 5.0
         log["t"].append(t)
         log["z"].append(float(rs[2]))
-        log["roll"].append(float(eu[0])); log["pitch"].append(float(eu[1]))
+        log["roll"].append(float(eu[0])); log["pitch"].append(float(eu[1])); log["yaw"].append(float(eu[2]))
         log["vx"].append(float(rs[7])); log["vy"].append(float(rs[8])); log["wz"].append(float(rs[11]))
+        log["base_x"].append(float(rs[0])); log["base_y"].append(float(rs[1]))
+        log["vx_b"].append(float(v_b[0])); log["vy_b"].append(float(v_b[1]))
         log["tau_max"].append(float(env.torques[0].abs().max()))
         log["foot_l"].append(bool(contact[0])); log["foot_r"].append(bool(contact[1]))
         log["cmd_vx"].append(float(env.commands[0, 0]))
+        log["cmd_vy"].append(float(env.commands[0, 1]))
+        log["cmd_wz"].append(float(env.commands[0, 2]))
         log["q"].append(env.dof_pos[0].detach().cpu().numpy().tolist())
         log["action"].append(action[0].detach().cpu().numpy().tolist())
         log["terminated"].append(bool(terminated[0]))
         if bool(terminated[0]) and fallen_at is None:
             fallen_at = t
         if step % 10 == 0:
-            print(f"[diag] {t:5.2f} z={rs[2]:.3f} roll={eu[0]:+.3f} pitch={eu[1]:+.3f} "
-                  f"vx={rs[7]:+.2f} tau={float(env.torques[0].abs().max()):6.1f} "
-                  f"fL={int(contact[0])} fR={int(contact[1])} cmd={float(env.commands[0,0]):+.2f}"
+            print(f"[diag] {t:5.2f} z={rs[2]:.3f} rpy=({eu[0]:+.2f},{eu[1]:+.2f},{eu[2]:+.2f}) "
+                  f"vw={rs[7]:+.2f} vb={float(v_b[0]):+.2f} tau={float(env.torques[0].abs().max()):6.1f} "
+                  f"fL={int(contact[0])} fR={int(contact[1])} cmd=({float(env.commands[0,0]):+.2f},{float(env.commands[0,2]):+.2f})"
                   + ("  <<TERMINATED" if bool(terminated[0]) else ""))
 
     print(f"[diag] done. terminated_at={fallen_at} (None = survived all {args.max_steps*0.01:.0f}s)")
+
+    # ---- frame-resolved walk summary (body-frame tracking vs world-frame motion) ----
+    import numpy as np
+    t = np.array(log["t"]); cmd = np.array(log["cmd_vx"]); vb = np.array(log["vx_b"])
+    vw = np.array(log["vx"]); yaw = np.array(log["yaw"])
+    m = (cmd >= 0.5) & (t > 2.0)  # active forward-command window
+    if m.any():
+        print(f"[diag] WALK-SUMMARY active-window (cmd_vx>=0.5, n={int(m.sum())}): "
+              f"mean_cmd={cmd[m].mean():+.3f} mean_vb={vb[m].mean():+.3f} mean_vw={vw[m].mean():+.3f} "
+              f"|vb-cmd|median={float(np.median(np.abs(vb[m]-cmd[m]))):.3f} mean_yaw={yaw[m].mean():+.2f}rad "
+              f"yaw_end={yaw[-1]:+.2f} net_disp=({log['base_x'][-1]:+.2f},{log['base_y'][-1]:+.2f})")
+        print(f"[diag] VERDINT: body-frame tracking {'OK' if np.median(np.abs(vb[m]-cmd[m])) <= 0.35 else 'FAIL'}; "
+              f"world-frame {'ALIGNED' if vw[m].mean() > 0.3 * cmd[m].mean() else 'DIVERGED (yaw-drift / backward)'}")
+    else:
+        print(f"[diag] WALK-SUMMARY: no active forward window; yaw_end={yaw[-1]:+.2f} "
+              f"net_disp=({log['base_x'][-1]:+.2f},{log['base_y'][-1]:+.2f})")
+
     out_dir = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", "x1_dh_stand", "gm_play")
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"diag_isaaclab_{args.trial}.pt")
